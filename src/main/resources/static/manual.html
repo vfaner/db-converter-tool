@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23667eea'/%3E%3Cstop offset='1' stop-color='%23764ba2'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cellipse cx='32' cy='16' rx='22' ry='9' fill='url(%23g)'/%3E%3Crect x='10' y='16' width='44' height='32' fill='url(%23g)'/%3E%3Cellipse cx='32' cy='48' rx='22' ry='9' fill='%23764ba2'/%3E%3Cellipse cx='32' cy='16' rx='22' ry='9' fill='%23667eea' opacity='0.9'/%3E%3Cellipse cx='32' cy='32' rx='22' ry='9' fill='none' stroke='%23fff' stroke-opacity='0.3' stroke-width='1.2'/%3E%3C/svg%3E">
+    <title>数据库信创改造工具 - 手工处理</title>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/element-plus"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .app-container {
+            display: flex;
+            min-height: 100vh;
+        }
+        .sidebar {
+            width: 220px;
+            background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+            box-shadow: 2px 0 10px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+        }
+        .sidebar-header {
+            padding: 25px 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .sidebar-header h1 {
+            color: #fff;
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+        .sidebar-header p {
+            color: rgba(255,255,255,0.6);
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        .menu {
+            padding: 20px 0;
+            flex: 1;
+        }
+        .menu-item {
+            display: flex;
+            align-items: center;
+            padding: 15px 25px;
+            color: rgba(255,255,255,0.7);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border-left: 3px solid transparent;
+        }
+        .menu-item:hover {
+            background: rgba(255,255,255,0.05);
+            color: #fff;
+        }
+        .menu-item.active {
+            background: rgba(102, 126, 234, 0.2);
+            color: #fff;
+            border-left-color: #667eea;
+        }
+        .menu-icon {
+            width: 20px;
+            height: 20px;
+            margin-right: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .main-content {
+            flex: 1;
+            padding: 30px;
+            overflow-y: auto;
+        }
+        .page-header {
+            margin-bottom: 25px;
+        }
+        .page-header h2 {
+            color: #fff;
+            font-size: 28px;
+            font-weight: 600;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .page-header p {
+            color: rgba(255,255,255,0.8);
+            margin-top: 8px;
+            font-size: 14px;
+        }
+        .content-card {
+            background: #fff;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        .form-section {
+            margin-bottom: 25px;
+        }
+        .form-section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+        }
+        .form-section-title::before {
+            content: '';
+            width: 4px;
+            height: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 2px;
+            margin-right: 10px;
+        }
+        .button-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+        .upload-area {
+            border: 2px dashed #d9d9d9;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .upload-area:hover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.02);
+        }
+        .upload-icon {
+            font-size: 32px;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        .result-area {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .result-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+        }
+        .result-content {
+            background: #fff;
+            border: 1px solid #e8e8e8;
+            border-radius: 8px;
+            padding: 15px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-all;
+            min-height: 100px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .el-button {
+            border-radius: 8px !important;
+        }
+        .el-button--primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            border: none !important;
+        }
+        .el-button--primary:hover {
+            opacity: 0.9;
+        }
+        .el-textarea__inner, .el-input__wrapper {
+            border-radius: 8px !important;
+        }
+        .switch-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .switch-label {
+            font-size: 14px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="app-container">
+            <!-- 左侧菜单 -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <h1>数据库改造工具</h1>
+                    <p>SQL智能转换平台</p>
+                </div>
+                <nav class="menu">
+                    <a href="/manual.html" class="menu-item active">
+                        <span class="menu-icon">✏️</span>
+                        <span>手工处理</span>
+                    </a>
+                    <a href="/auto.html" class="menu-item">
+                        <span class="menu-icon">⚡</span>
+                        <span>自动处理</span>
+                    </a>
+                </nav>
+            </aside>
+
+            <!-- 主内容区 -->
+            <main class="main-content">
+                <div class="page-header">
+                    <h2>手工处理</h2>
+                    <p>上传图片识别SQL或手动输入SQL，智能转换为国产数据库兼容语法</p>
+                </div>
+
+                <div class="content-card">
+                    <!-- 图片上传 -->
+                    <div class="form-section">
+                        <div class="form-section-title">上传图片识别SQL</div>
+                        <el-upload
+                            class="upload-demo"
+                            action="/api/ocr"
+                            :show-file-list="false"
+                            :on-success="handleOcrSuccess"
+                            :on-error="handleOcrError"
+                            :before-upload="beforeUpload"
+                            accept=".png,.jpg,.jpeg,.bmp"
+                        >
+                            <div class="upload-area">
+                                <div class="upload-icon">📷</div>
+                                <div>点击或拖拽上传图片</div>
+                                <div style="font-size: 12px; color: #999; margin-top: 5px;">支持 PNG/JPG/JPEG/BMP 格式</div>
+                            </div>
+                        </el-upload>
+                    </div>
+
+                    <!-- SQL输入 -->
+                    <div class="form-section">
+                        <div class="form-section-title">SQL输入</div>
+                        <el-input
+                            v-model="sourceSql"
+                            type="textarea"
+                            :rows="6"
+                            placeholder="请输入或粘贴SQL语句..."
+                        ></el-input>
+                    </div>
+
+                    <!-- 目标数据库和AI优化选项 -->
+                    <div class="form-section" style="display: flex; gap: 30px; align-items: center;">
+                        <div style="flex: 1;">
+                            <div class="form-section-title">目标数据库</div>
+                            <el-select v-model="targetDb" placeholder="请选择目标数据库" style="width: 200px;">
+                                <el-option
+                                    v-for="db in databases"
+                                    :key="db.value"
+                                    :label="db.label"
+                                    :value="db.value"
+                                ></el-option>
+                            </el-select>
+                        </div>
+                        <div>
+                            <div class="form-section-title">AI优化</div>
+                            <div class="switch-wrapper">
+                                <el-switch v-model="enableOptimize"></el-switch>
+                                <span class="switch-label">启用AI深度优化</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 操作按钮 -->
+                    <div class="button-group">
+                        <el-button type="primary" size="large" @click="handleConvert" :loading="loading">
+                            {{ enableOptimize ? 'AI优化转换' : '转换' }}
+                        </el-button>
+                        <el-button size="large" @click="clearAll">清空</el-button>
+                    </div>
+
+                    <!-- 转换结果 -->
+                    <div v-if="result" class="result-area">
+                        <div class="result-header">
+                            <span class="result-title">转换结果</span>
+                            <el-button type="primary" size="small" @click="copyResult">
+                                📋 复制
+                            </el-button>
+                        </div>
+                        <div class="result-content">{{ result }}</div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, onMounted } = Vue;
+
+        const app = createApp({
+            setup() {
+                const sourceSql = ref('');
+                const targetDb = ref('gaussdb');
+                const enableOptimize = ref(false);
+                const result = ref('');
+                const loading = ref(false);
+
+                const databases = ref([
+                    { value: 'gaussdb', label: '高斯数据库 (GaussDB)' },
+                    { value: 'dameng', label: '达梦数据库 (DM)' },
+                    { value: 'kingbase', label: '人大金仓 (KingBase)' },
+                    { value: 'oceanbase', label: 'OceanBase' },
+                    { value: 'tidb', label: 'TiDB' },
+                    { value: 'gbase', label: '南大通用 (GBase)' },
+                    { value: 'shentong', label: '神州通用 (ShenTong)' }
+                ]);
+
+                const beforeUpload = (file) => {
+                    const isImage = ['image/png', 'image/jpg', 'image/jpeg', 'image/bmp'].includes(file.type);
+                    const isLt10M = file.size / 1024 / 1024 < 10;
+
+                    if (!isImage) {
+                        ElementPlus.ElMessage.error('只能上传图片文件！');
+                        return false;
+                    }
+                    if (!isLt10M) {
+                        ElementPlus.ElMessage.error('图片大小不能超过10MB！');
+                        return false;
+                    }
+                    return true;
+                };
+
+                const handleOcrSuccess = (response) => {
+                    if (response.code === 200) {
+                        sourceSql.value = response.data;
+                        ElementPlus.ElMessage.success('OCR识别成功');
+                    } else {
+                        ElementPlus.ElMessage.error(response.message || 'OCR识别失败');
+                    }
+                };
+
+                const handleOcrError = (error) => {
+                    ElementPlus.ElMessage.error('OCR识别失败: ' + error.message);
+                };
+
+                const handleConvert = async () => {
+                    if (!sourceSql.value.trim()) {
+                        ElementPlus.ElMessage.warning('请输入SQL语句');
+                        return;
+                    }
+
+                    loading.value = true;
+                    try {
+                        const url = enableOptimize.value ? '/api/optimize' : '/api/convert';
+                        const response = await axios.post(url, {
+                            sourceSql: sourceSql.value,
+                            targetDb: targetDb.value
+                        });
+
+                        if (response.data.code === 200) {
+                            result.value = response.data.data.convertedSql;
+                            ElementPlus.ElMessage.success('转换成功');
+                        } else {
+                            ElementPlus.ElMessage.error(response.data.message || '转换失败');
+                        }
+                    } catch (error) {
+                        ElementPlus.ElMessage.error('转换失败: ' + (error.response?.data?.message || error.message));
+                    } finally {
+                        loading.value = false;
+                    }
+                };
+
+                const copyResult = async () => {
+                    if (!result.value) {
+                        ElementPlus.ElMessage.warning('没有可复制的内容');
+                        return;
+                    }
+
+                    try {
+                        await navigator.clipboard.writeText(result.value);
+                        ElementPlus.ElMessage.success('已复制到剪贴板');
+                    } catch (error) {
+                        // 降级方案
+                        const textarea = document.createElement('textarea');
+                        textarea.value = result.value;
+                        document.body.appendChild(textarea);
+                        textarea.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(textarea);
+                        ElementPlus.ElMessage.success('已复制到剪贴板');
+                    }
+                };
+
+                const clearAll = () => {
+                    sourceSql.value = '';
+                    result.value = '';
+                };
+
+                return {
+                    sourceSql,
+                    targetDb,
+                    enableOptimize,
+                    result,
+                    loading,
+                    databases,
+                    beforeUpload,
+                    handleOcrSuccess,
+                    handleOcrError,
+                    handleConvert,
+                    copyResult,
+                    clearAll
+                };
+            }
+        });
+
+        app.use(ElementPlus);
+        app.mount('#app');
+    </script>
+</body>
+</html>

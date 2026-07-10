@@ -1,0 +1,259 @@
+server:
+  port: 8080
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+  web:
+    resources:
+      static-locations: classpath:/static/
+
+anthropic:
+  api:
+    # 阿里云百炼 API Key（在 https://bailian.console.aliyun.com 获取）
+    key: ${ANTHROPIC_API_KEY:YOUR_BAILIAN_API_KEY}
+    # 百炼 OpenAI 兼容接口地址
+    base-url: ${ANTHROPIC_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+    # 文本模型（用于 SQL 优化）
+    model: ${ANTHROPIC_MODEL:qwen-max-latest}
+    # 多模态视觉模型（用于图片 OCR 识别）
+    vision-model: ${ANTHROPIC_VISION_MODEL:qwen-vl-max-latest}
+
+dialect:
+  gaussdb:
+    functions:
+      NOW: CURRENT_TIMESTAMP
+      CONCAT: CONCAT
+      IFNULL: COALESCE
+      DATE_FORMAT: "TO_CHAR({0}, {1})"
+      DATE_ADD: "({0} + INTERVAL '{1} days')"
+      DATE_SUB: "({0} - INTERVAL '{1} days')"
+      SUBSTRING: "SUBSTR"
+      LENGTH: LENGTH
+      TRIM: TRIM
+      UPPER: UPPER
+      LOWER: LOWER
+      REPLACE: REPLACE
+      ROUND: ROUND
+      CEIL: CEIL
+      FLOOR: FLOOR
+    types:
+      TEXT: CLOB
+      VARCHAR2: VARCHAR
+      INT: INTEGER
+      BIGINT: BIGINT
+      DECIMAL: NUMERIC
+      DATETIME: TIMESTAMP
+      DATE: DATE
+      TINYINT: SMALLINT
+      MEDIUMINT: INTEGER
+      LONGTEXT: CLOB
+      MEDIUMTEXT: CLOB
+      DOUBLE: DOUBLE PRECISION
+      FLOAT: REAL
+    syntax:
+      limit: "FETCH FIRST {n} ROWS ONLY"
+      auto_increment: ""
+      comment: "-- {comment}"
+
+  dameng:
+    functions:
+      NOW: SYSDATE
+      CONCAT: CONCAT
+      IFNULL: NVL
+      DATE_FORMAT: "TO_CHAR({0}, {1})"
+      DATE_ADD: "DATEADD(day, {1}, {0})"
+      DATE_SUB: "DATEADD(day, -{1}, {0})"
+      SUBSTRING: "SUBSTR"
+      LENGTH: LENGTH
+      TRIM: TRIM
+      UPPER: UPPER
+      LOWER: LOWER
+      REPLACE: REPLACE
+      ROUND: ROUND
+      CEIL: CEIL
+      FLOOR: FLOOR
+    types:
+      TEXT: CLOB
+      VARCHAR2: VARCHAR
+      INT: INT
+      BIGINT: BIGINT
+      DECIMAL: DECIMAL
+      DATETIME: TIMESTAMP
+      DATE: DATE
+      TINYINT: TINYINT
+      MEDIUMINT: INT
+      LONGTEXT: CLOB
+      MEDIUMTEXT: CLOB
+      DOUBLE: DOUBLE
+      FLOAT: FLOAT
+    syntax:
+      limit: "WHERE ROWNUM <= {n}"
+      auto_increment: "IDENTITY(1,1)"
+      comment: "-- {comment}"
+
+  kingbase:
+    functions:
+      NOW: CURRENT_TIMESTAMP
+      CONCAT: CONCAT
+      IFNULL: COALESCE
+      DATE_FORMAT: "TO_CHAR({0}, {1})"
+      DATE_ADD: "({0} + INTERVAL '{1} days')"
+      DATE_SUB: "({0} - INTERVAL '{1} days')"
+      SUBSTRING: "SUBSTR"
+      LENGTH: LENGTH
+      TRIM: TRIM
+      UPPER: UPPER
+      LOWER: LOWER
+      REPLACE: REPLACE
+      ROUND: ROUND
+      CEIL: CEIL
+      FLOOR: FLOOR
+    types:
+      TEXT: TEXT
+      VARCHAR2: VARCHAR
+      INT: INTEGER
+      BIGINT: BIGINT
+      DECIMAL: NUMERIC
+      DATETIME: TIMESTAMP
+      DATE: DATE
+      TINYINT: SMALLINT
+      MEDIUMINT: INTEGER
+      LONGTEXT: TEXT
+      MEDIUMTEXT: TEXT
+      DOUBLE: DOUBLE PRECISION
+      FLOAT: REAL
+    syntax:
+      limit: "FETCH FIRST {n} ROWS ONLY"
+      auto_increment: ""
+      comment: "-- {comment}"
+
+  oceanbase:
+    functions:
+      NOW: CURRENT_TIMESTAMP
+      CONCAT: CONCAT
+      IFNULL: NVL
+      DATE_FORMAT: "DATE_FORMAT({0}, {1})"
+      DATE_ADD: "DATE_ADD({0}, INTERVAL {1} DAY)"
+      DATE_SUB: "DATE_SUB({0}, INTERVAL {1} DAY)"
+      SUBSTRING: "SUBSTR"
+      LENGTH: LENGTH
+      TRIM: TRIM
+      UPPER: UPPER
+      LOWER: LOWER
+      REPLACE: REPLACE
+      ROUND: ROUND
+      CEIL: CEIL
+      FLOOR: FLOOR
+    types:
+      TEXT: LONGTEXT
+      VARCHAR2: VARCHAR
+      INT: INT
+      BIGINT: BIGINT
+      DECIMAL: DECIMAL
+      DATETIME: DATETIME
+      DATE: DATE
+      TINYINT: TINYINT
+      MEDIUMINT: MEDIUMINT
+      LONGTEXT: LONGTEXT
+      MEDIUMTEXT: MEDIUMTEXT
+      DOUBLE: DOUBLE
+      FLOAT: FLOAT
+    syntax:
+      limit: "LIMIT {n}"
+      auto_increment: "AUTO_INCREMENT"
+      comment: "-- {comment}"
+
+  tidb:
+    functions:
+      NOW: CURRENT_TIMESTAMP
+      CONCAT: CONCAT
+      IFNULL: IFNULL
+      DATE_FORMAT: "DATE_FORMAT({0}, {1})"
+      DATE_ADD: "DATE_ADD({0}, INTERVAL {1} DAY)"
+      DATE_SUB: "DATE_SUB({0}, INTERVAL {1} DAY)"
+      SUBSTRING: "SUBSTR"
+      LENGTH: LENGTH
+      TRIM: TRIM
+      UPPER: UPPER
+      LOWER: LOWER
+      REPLACE: REPLACE
+      ROUND: ROUND
+      CEIL: CEIL
+      FLOOR: FLOOR
+    types:
+      TEXT: TEXT
+      VARCHAR2: VARCHAR
+      INT: INT
+      BIGINT: BIGINT
+      DECIMAL: DECIMAL
+      DATETIME: DATETIME
+      DATE: DATE
+      TINYINT: TINYINT
+      MEDIUMINT: MEDIUMINT
+      LONGTEXT: LONGTEXT
+      MEDIUMTEXT: MEDIUMTEXT
+      DOUBLE: DOUBLE
+      FLOAT: FLOAT
+    syntax:
+      limit: "LIMIT {n}"
+      auto_increment: "AUTO_INCREMENT"
+      comment: "-- {comment}"
+
+  gbase:
+    functions:
+      NOW: CURRENT_TIMESTAMP
+      CONCAT: CONCAT
+      IFNULL: NVL
+      DATE_FORMAT: "TO_CHAR({0}, {1})"
+      DATE_ADD: "({0} + {1})"
+      DATE_SUB: "({0} - {1})"
+      SUBSTRING: "SUBSTR"
+      LENGTH: LENGTH
+      TRIM: TRIM
+      UPPER: UPPER
+      LOWER: LOWER
+      REPLACE: REPLACE
+    types:
+      TEXT: CLOB
+      VARCHAR2: VARCHAR
+      INT: INTEGER
+      BIGINT: BIGINT
+      DECIMAL: NUMERIC
+      DATETIME: TIMESTAMP
+      DATE: DATE
+    syntax:
+      limit: "FETCH FIRST {n} ROWS ONLY"
+      auto_increment: ""
+      comment: "-- {comment}"
+
+  shentong:
+    functions:
+      NOW: CURRENT_TIMESTAMP
+      CONCAT: CONCAT
+      IFNULL: COALESCE
+      DATE_FORMAT: "TO_CHAR({0}, {1})"
+      DATE_ADD: "({0} + {1})"
+      DATE_SUB: "({0} - {1})"
+      SUBSTRING: "SUBSTR"
+      LENGTH: LENGTH
+    types:
+      TEXT: CLOB
+      VARCHAR2: VARCHAR
+      INT: INTEGER
+      BIGINT: BIGINT
+      DECIMAL: NUMERIC
+      DATETIME: TIMESTAMP
+      DATE: DATE
+    syntax:
+      limit: "FETCH FIRST {n} ROWS ONLY"
+      auto_increment: ""
+      comment: "-- {comment}"
+
+logging:
+  level:
+    com.dbconverter: DEBUG
+  file:
+    name: logs/db-converter.log

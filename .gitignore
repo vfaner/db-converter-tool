@@ -1,0 +1,23 @@
+# IDE
+.idea/
+*.iml
+
+# Build output
+target/
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Maven
+.mvn/
+mvnw
+mvnw.cmd
+
+# Environment
+.env
+*.env.local

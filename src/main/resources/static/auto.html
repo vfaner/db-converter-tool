@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23667eea'/%3E%3Cstop offset='1' stop-color='%23764ba2'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cellipse cx='32' cy='16' rx='22' ry='9' fill='url(%23g)'/%3E%3Crect x='10' y='16' width='44' height='32' fill='url(%23g)'/%3E%3Cellipse cx='32' cy='48' rx='22' ry='9' fill='%23764ba2'/%3E%3Cellipse cx='32' cy='16' rx='22' ry='9' fill='%23667eea' opacity='0.9'/%3E%3Cellipse cx='32' cy='32' rx='22' ry='9' fill='none' stroke='%23fff' stroke-opacity='0.3' stroke-width='1.2'/%3E%3C/svg%3E">
+    <title>数据库信创改造工具 - 自动处理</title>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/element-plus"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .app-container {
+            display: flex;
+            min-height: 100vh;
+        }
+        .sidebar {
+            width: 220px;
+            background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+            box-shadow: 2px 0 10px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+        }
+        .sidebar-header {
+            padding: 25px 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .sidebar-header h1 {
+            color: #fff;
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+        .sidebar-header p {
+            color: rgba(255,255,255,0.6);
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        .menu {
+            padding: 20px 0;
+            flex: 1;
+        }
+        .menu-item {
+            display: flex;
+            align-items: center;
+            padding: 15px 25px;
+            color: rgba(255,255,255,0.7);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border-left: 3px solid transparent;
+        }
+        .menu-item:hover {
+            background: rgba(255,255,255,0.05);
+            color: #fff;
+        }
+        .menu-item.active {
+            background: rgba(102, 126, 234, 0.2);
+            color: #fff;
+            border-left-color: #667eea;
+        }
+        .menu-icon {
+            width: 20px;
+            height: 20px;
+            margin-right: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .main-content {
+            flex: 1;
+            padding: 30px;
+            overflow-y: auto;
+        }
+        .page-header {
+            margin-bottom: 25px;
+        }
+        .page-header h2 {
+            color: #fff;
+            font-size: 28px;
+            font-weight: 600;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .page-header p {
+            color: rgba(255,255,255,0.8);
+            margin-top: 8px;
+            font-size: 14px;
+        }
+        .content-card {
+            background: #fff;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        .form-section {
+            margin-bottom: 25px;
+        }
+        .form-section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+        }
+        .form-section-title::before {
+            content: '';
+            width: 4px;
+            height: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 2px;
+            margin-right: 10px;
+        }
+        .form-row {
+            display: flex;
+            gap: 15px;
+            align-items: flex-end;
+        }
+        .form-row .el-input {
+            flex: 1;
+        }
+        .button-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+        .progress-section {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 25px;
+        }
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .progress-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+        }
+        .progress-status {
+            font-size: 12px;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-weight: 500;
+        }
+        .progress-status.running {
+            background: #e6f7ff;
+            color: #1890ff;
+        }
+        .progress-status.completed {
+            background: #f6ffed;
+            color: #52c41a;
+        }
+        .progress-status.failed {
+            background: #fff2f0;
+            color: #ff4d4f;
+        }
+        .table-section {
+            margin-top: 25px;
+        }
+        .table-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .table-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+        }
+        .table-count {
+            font-size: 13px;
+            color: #666;
+        }
+        .sql-preview {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 300px;
+        }
+        .el-button {
+            border-radius: 8px !important;
+        }
+        .el-button--primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            border: none !important;
+        }
+        .el-button--primary:hover {
+            opacity: 0.9;
+        }
+        .el-button--danger {
+            background: linear-gradient(135deg, #ff4d4f 0%, #cf1322 100%) !important;
+            border: none !important;
+        }
+        .el-button--danger:hover {
+            opacity: 0.9;
+        }
+        .el-input__wrapper, .el-textarea__inner {
+            border-radius: 8px !important;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        .empty-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        .path-input-group {
+            display: flex;
+            gap: 8px;
+            flex: 1;
+        }
+        .path-input-group .el-input {
+            flex: 1;
+        }
+        .folder-picker-btn {
+            white-space: nowrap;
+        }
+        /* 文件夹选择器弹窗样式 */
+        .folder-dialog-body {
+            padding: 0;
+        }
+        .folder-breadcrumb {
+            background: #f5f7fa;
+            padding: 10px 15px;
+            border-bottom: 1px solid #ebeef5;
+            font-size: 13px;
+            color: #606266;
+            word-break: break-all;
+            min-height: 40px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .folder-breadcrumb .path-segment {
+            cursor: pointer;
+            color: #409eff;
+            padding: 2px 4px;
+            border-radius: 3px;
+        }
+        .folder-breadcrumb .path-segment:hover {
+            background: rgba(64, 158, 255, 0.1);
+        }
+        .folder-breadcrumb .path-segment.current {
+            color: #303133;
+            cursor: default;
+            font-weight: 500;
+        }
+        .folder-breadcrumb .separator {
+            color: #c0c4cc;
+        }
+        .folder-list {
+            max-height: 400px;
+            overflow-y: auto;
+            padding: 8px 0;
+        }
+        .folder-item {
+            display: flex;
+            align-items: center;
+            padding: 8px 15px;
+            cursor: pointer;
+            transition: background 0.2s;
+            border-radius: 4px;
+            margin: 2px 8px;
+        }
+        .folder-item:hover {
+            background: #ecf5ff;
+        }
+        .folder-item .folder-icon {
+            margin-right: 8px;
+            font-size: 18px;
+        }
+        .folder-item .folder-name {
+            font-size: 14px;
+            color: #303133;
+        }
+        .folder-empty {
+            padding: 40px;
+            text-align: center;
+            color: #909399;
+            font-size: 14px;
+        }
+        .folder-loading {
+            padding: 40px;
+            text-align: center;
+        }
+        .folder-up-item {
+            display: flex;
+            align-items: center;
+            padding: 8px 15px;
+            cursor: pointer;
+            transition: background 0.2s;
+            border-radius: 4px;
+            margin: 2px 8px 6px 8px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .folder-up-item:hover {
+            background: #f5f7fa;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="app-container">
+            <!-- 左侧菜单 -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <h1>数据库改造工具</h1>
+                    <p>SQL智能转换平台</p>
+                </div>
+                <nav class="menu">
+                    <a href="/manual.html" class="menu-item">
+                        <span class="menu-icon">✏️</span>
+                        <span>手工处理</span>
+                    </a>
+                    <a href="/auto.html" class="menu-item active">
+                        <span class="menu-icon">⚡</span>
+                        <span>自动处理</span>
+                    </a>
+                </nav>
+            </aside>
+
+            <!-- 主内容区 -->
+            <main class="main-content">
+                <div class="page-header">
+                    <h2>自动处理</h2>
+                    <p>扫描项目目录，自动识别并转换SQL语句为国产数据库兼容语法</p>
+                </div>
+
+                <div class="content-card">
+                    <!-- 扫描配置 -->
+                    <div class="form-section">
+                        <div class="form-section-title">扫描配置</div>
+                        <div class="form-row">
+                            <div class="path-input-group">
+                                <el-input
+                                    v-model="projectPath"
+                                    placeholder="请输入项目目录路径，如：/path/to/project"
+                                    clearable
+                                ></el-input>
+                                <el-button type="primary" @click="openFolderPicker" class="folder-picker-btn">
+                                    📁 选择文件夹
+                                </el-button>
+                            </div>
+                            <el-select v-model="targetDb" placeholder="目标数据库" style="width: 200px;">
+                                <el-option
+                                    v-for="db in databases"
+                                    :key="db.value"
+                                    :label="db.label"
+                                    :value="db.value"
+                                ></el-option>
+                            </el-select>
+                        </div>
+                    </div>
+
+                    <!-- 操作按钮 -->
+                    <div class="button-group">
+                        <el-button type="primary" size="large" @click="startScan" :loading="scanning">
+                            🔍 开始扫描
+                        </el-button>
+                        <el-button type="danger" size="large" @click="startReplace"
+                            :disabled="!scanResult.items || scanResult.items.length === 0"
+                            :loading="replacing">
+                            🚀 立即改造
+                        </el-button>
+                    </div>
+
+                    <!-- 进度显示 -->
+                    <div v-if="taskId" class="progress-section">
+                        <div class="progress-header">
+                            <span class="progress-title">扫描进度</span>
+                            <span class="progress-status" :class="scanResult.status">
+                                {{ statusText }}
+                            </span>
+                        </div>
+                        <el-progress
+                            :percentage="scanResult.progress"
+                            :status="progressStatus"
+                            :stroke-width="12"
+                        ></el-progress>
+                        <div style="margin-top: 10px; font-size: 13px; color: #666;">
+                            已发现 <strong>{{ scanResult.items ? scanResult.items.length : 0 }}</strong> 处需要改造
+                        </div>
+                    </div>
+
+                    <!-- 改造清单 -->
+                    <div v-if="scanResult.items && scanResult.items.length > 0" class="table-section">
+                        <div class="table-header">
+                            <span class="table-title">改造清单</span>
+                            <span class="table-count">共 {{ scanResult.items.length }} 项</span>
+                        </div>
+                        <el-table
+                            :data="scanResult.items"
+                            style="width: 100%"
+                            max-height="400"
+                            border
+                            stripe
+                        >
+                            <el-table-column prop="filePath" label="文件路径" width="280">
+                                <template #default="scope">
+                                    <span class="sql-preview" :title="scope.row.filePath">
+                                        {{ scope.row.filePath }}
+                                    </span>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="sourceSql" label="源SQL片段" min-width="250">
+                                <template #default="scope">
+                                    <el-popover
+                                        placement="top"
+                                        :width="400"
+                                        trigger="hover"
+                                    >
+                                        <template #reference>
+                                            <div class="sql-preview">{{ scope.row.sourceSql }}</div>
+                                        </template>
+                                        <div style="font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all;">
+                                            {{ scope.row.sourceSql }}
+                                        </div>
+                                    </el-popover>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="targetSql" label="目标SQL片段" min-width="250">
+                                <template #default="scope">
+                                    <el-popover
+                                        placement="top"
+                                        :width="400"
+                                        trigger="hover"
+                                    >
+                                        <template #reference>
+                                            <div class="sql-preview">{{ scope.row.targetSql }}</div>
+                                        </template>
+                                        <div style="font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all;">
+                                            {{ scope.row.targetSql }}
+                                        </div>
+                                    </el-popover>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="conversionType" label="改造类型" width="150">
+                            </el-table-column>
+                        </el-table>
+                    </div>
+
+                    <!-- 空状态 -->
+                    <div v-else-if="taskId && scanResult.status === 'completed' && (!scanResult.items || scanResult.items.length === 0)" class="empty-state">
+                        <div class="empty-icon">✅</div>
+                        <div>未发现需要改造的SQL语句</div>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <!-- 文件夹选择器弹窗 -->
+        <el-dialog
+            v-model="folderPickerVisible"
+            title="选择项目目录"
+            width="600px"
+            :close-on-click-modal="false"
+        >
+            <div class="folder-dialog-body">
+                <!-- 面包屑路径导航 -->
+                <div class="folder-breadcrumb">
+                    <span>📍</span>
+                    <template v-for="(seg, idx) in breadcrumbSegments" :key="idx">
+                        <span
+                            class="path-segment"
+                            :class="{ current: idx === breadcrumbSegments.length - 1 }"
+                            @click="navigateToSegment(idx)"
+                        >{{ seg.name }}</span>
+                        <span v-if="idx < breadcrumbSegments.length - 1" class="separator">/</span>
+                    </template>
+                </div>
+
+                <!-- 目录列表 -->
+                <div class="folder-list" v-loading="folderLoading">
+                    <!-- 返回上级 -->
+                    <div
+                        v-if="folderParentPath !== null"
+                        class="folder-up-item"
+                        @click="navigateTo(folderParentPath)"
+                    >
+                        <span class="folder-icon">⬆️</span>
+                        <span class="folder-name" style="color: #909399;">.. (返回上级)</span>
+                    </div>
+
+                    <!-- 子目录 -->
+                    <template v-if="folderList.length > 0">
+                        <div
+                            v-for="dir in folderList"
+                            :key="dir.path"
+                            class="folder-item"
+                            @click="navigateTo(dir.path)"
+                            @dblclick="confirmSelectFolder(dir.path)"
+                        >
+                            <span class="folder-icon">📁</span>
+                            <span class="folder-name">{{ dir.name }}</span>
+                        </div>
+                    </template>
+
+                    <div v-else-if="!folderLoading" class="folder-empty">
+                        （该目录下没有子文件夹）
+                    </div>
+                </div>
+            </div>
+
+            <template #footer>
+                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                    <div style="font-size: 12px; color: #909399;">
+                        当前：{{ folderCurrentPath || '-' }}
+                    </div>
+                    <div>
+                        <el-button @click="folderPickerVisible = false">取消</el-button>
+                        <el-button type="primary" @click="confirmSelectCurrentFolder">
+                            选择此目录
+                        </el-button>
+                    </div>
+                </div>
+            </template>
+        </el-dialog>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onUnmounted, watch } = Vue;
+
+        const app = createApp({
+            setup() {
+                const projectPath = ref('');
+                const targetDb = ref('gaussdb');
+                const taskId = ref('');
+                const scanning = ref(false);
+                const replacing = ref(false);
+                const scanResult = ref({
+                    progress: 0,
+                    status: '',
+                    items: []
+                });
+
+                // 文件夹选择器状态
+                const folderPickerVisible = ref(false);
+                const folderLoading = ref(false);
+                const folderCurrentPath = ref('');
+                const folderParentPath = ref(null);
+                const folderList = ref([]);
+
+                let progressTimer = null;
+
+                const databases = ref([
+                    { value: 'gaussdb', label: '高斯数据库 (GaussDB)' },
+                    { value: 'dameng', label: '达梦数据库 (DM)' },
+                    { value: 'kingbase', label: '人大金仓 (KingBase)' },
+                    { value: 'oceanbase', label: 'OceanBase' },
+                    { value: 'tidb', label: 'TiDB' },
+                    { value: 'gbase', label: '南大通用 (GBase)' },
+                    { value: 'shentong', label: '神州通用 (ShenTong)' }
+                ]);
+
+                const statusText = computed(() => {
+                    switch (scanResult.value.status) {
+                        case 'running': return '扫描中...';
+                        case 'completed': return '已完成';
+                        case 'failed': return '失败';
+                        default: return '等待中';
+                    }
+                });
+
+                const progressStatus = computed(() => {
+                    if (scanResult.value.status === 'completed') return 'success';
+                    if (scanResult.value.status === 'failed') return 'exception';
+                    return '';
+                });
+
+                const startScan = async () => {
+                    if (!projectPath.value.trim()) {
+                        ElementPlus.ElMessage.warning('请输入项目目录路径');
+                        return;
+                    }
+
+                    scanning.value = true;
+                    taskId.value = '';
+                    scanResult.value = { progress: 0, status: 'running', items: [] };
+
+                    try {
+                        const response = await axios.post('/api/scan', {
+                            path: projectPath.value,
+                            targetDb: targetDb.value
+                        });
+
+                        if (response.data.code === 200) {
+                            taskId.value = response.data.data.taskId;
+                            ElementPlus.ElMessage.success('扫描任务已启动');
+                            startProgressPolling();
+                        } else {
+                            ElementPlus.ElMessage.error(response.data.message || '启动扫描失败');
+                            scanning.value = false;
+                        }
+                    } catch (error) {
+                        ElementPlus.ElMessage.error('启动扫描失败: ' + (error.response?.data?.message || error.message));
+                        scanning.value = false;
+                    }
+                };
+
+                const startProgressPolling = () => {
+                    progressTimer = setInterval(fetchProgress, 2000);
+                    fetchProgress(); // 立即获取一次
+                };
+
+                const stopProgressPolling = () => {
+                    if (progressTimer) {
+                        clearInterval(progressTimer);
+                        progressTimer = null;
+                    }
+                };
+
+                const fetchProgress = async () => {
+                    if (!taskId.value) return;
+
+                    try {
+                        const response = await axios.get('/api/scan/progress', {
+                            params: { taskId: taskId.value }
+                        });
+
+                        if (response.data.code === 200) {
+                            const data = response.data.data;
+                            scanResult.value.progress = data.progress;
+                            scanResult.value.status = data.status;
+                            scanResult.value.items = data.items || [];
+
+                            if (data.status === 'completed' || data.status === 'failed') {
+                                stopProgressPolling();
+                                scanning.value = false;
+
+                                if (data.status === 'completed') {
+                                    const count = data.items ? data.items.length : 0;
+                                    ElementPlus.ElMessage.success(`扫描完成，发现 ${count} 处需要改造`);
+                                } else {
+                                    ElementPlus.ElMessage.error('扫描失败');
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        console.error('获取进度失败:', error);
+                    }
+                };
+
+                const startReplace = async () => {
+                    if (!taskId.value) {
+                        ElementPlus.ElMessage.warning('没有可执行的改造任务');
+                        return;
+                    }
+
+                    const itemCount = scanResult.value.items ? scanResult.value.items.length : 0;
+                    if (itemCount === 0) {
+                        ElementPlus.ElMessage.warning('没有需要改造的项目');
+                        return;
+                    }
+
+                    try {
+                        await ElementPlus.ElMessageBox.confirm(
+                            `确认要改造 ${itemCount} 处SQL吗？改造前会自动创建备份文件。`,
+                            '确认改造',
+                            {
+                                confirmButtonText: '确认改造',
+                                cancelButtonText: '取消',
+                                type: 'warning'
+                            }
+                        );
+
+                        replacing.value = true;
+                        const response = await axios.post('/api/replace', {
+                            taskId: taskId.value
+                        });
+
+                        if (response.data.code === 200) {
+                            const result = response.data.data;
+                            ElementPlus.ElMessageBox.alert(
+                                `改造完成！<br/>处理文件: ${result.totalFiles} 个<br/>成功文件: ${result.successFiles} 个<br/>总替换数: ${result.totalReplacements} 处`,
+                                '改造结果',
+                                {
+                                    dangerouslyUseHTMLString: true,
+                                    confirmButtonText: '确定'
+                                }
+                            );
+                        } else {
+                            ElementPlus.ElMessage.error(response.data.message || '改造失败');
+                        }
+                    } catch (error) {
+                        if (error !== 'cancel') {
+                            ElementPlus.ElMessage.error('改造失败: ' + (error.response?.data?.message || error.message));
+                        }
+                    } finally {
+                        replacing.value = false;
+                    }
+                };
+
+                // 面包屑路径分段
+                const breadcrumbSegments = computed(() => {
+                    const path = folderCurrentPath.value;
+                    if (!path) return [];
+
+                    const isWindows = /^[A-Za-z]:/.test(path);
+                    const segments = [];
+
+                    if (isWindows) {
+                        // Windows: C:\Users\foo\bar
+                        const parts = path.split(/\\/).filter(Boolean);
+                        let accumulated = '';
+                        parts.forEach((part, idx) => {
+                            accumulated = idx === 0 ? part + '\\' : accumulated + '\\' + part;
+                            segments.push({ name: part, path: accumulated });
+                        });
+                    } else {
+                        // Unix: /home/user/project
+                        segments.push({ name: '/', path: '/' });
+                        const parts = path.split('/').filter(Boolean);
+                        let accumulated = '';
+                        parts.forEach(part => {
+                            accumulated += '/' + part;
+                            segments.push({ name: part, path: accumulated });
+                        });
+                    }
+                    return segments;
+                });
+
+                const openFolderPicker = async () => {
+                    folderPickerVisible.value = true;
+                    // 如果已有路径，尝试导航到该路径的父级；否则加载默认（用户主目录）
+                    const initialPath = projectPath.value.trim() || '';
+                    await loadDirectories(initialPath);
+                };
+
+                const loadDirectories = async (path) => {
+                    folderLoading.value = true;
+                    folderList.value = [];
+                    try {
+                        const params = path ? { path } : {};
+                        const response = await axios.get('/api/directories', { params });
+                        if (response.data.code === 200) {
+                            const data = response.data.data;
+                            folderCurrentPath.value = data.currentPath;
+                            folderParentPath.value = data.parentPath;
+                            folderList.value = data.directories || [];
+                        } else {
+                            ElementPlus.ElMessage.error(response.data.message || '加载目录失败');
+                        }
+                    } catch (error) {
+                        ElementPlus.ElMessage.error('加载目录失败: ' + (error.response?.data?.message || error.message));
+                    } finally {
+                        folderLoading.value = false;
+                    }
+                };
+
+                const navigateTo = (path) => {
+                    loadDirectories(path);
+                };
+
+                const navigateToSegment = (idx) => {
+                    const segments = breadcrumbSegments.value;
+                    if (idx < segments.length - 1) {
+                        loadDirectories(segments[idx].path);
+                    }
+                };
+
+                const confirmSelectCurrentFolder = () => {
+                    if (folderCurrentPath.value) {
+                        projectPath.value = folderCurrentPath.value;
+                    }
+                    folderPickerVisible.value = false;
+                };
+
+                const confirmSelectFolder = (path) => {
+                    projectPath.value = path;
+                    folderPickerVisible.value = false;
+                };
+
+                onUnmounted(() => {
+                    stopProgressPolling();
+                });
+
+                return {
+                    projectPath,
+                    targetDb,
+                    databases,
+                    taskId,
+                    scanning,
+                    replacing,
+                    scanResult,
+                    statusText,
+                    progressStatus,
+                    startScan,
+                    startReplace,
+                    // 文件夹选择器
+                    folderPickerVisible,
+                    folderLoading,
+                    folderCurrentPath,
+                    folderParentPath,
+                    folderList,
+                    breadcrumbSegments,
+                    openFolderPicker,
+                    navigateTo,
+                    navigateToSegment,
+                    confirmSelectCurrentFolder,
+                    confirmSelectFolder
+                };
+            }
+        });
+
+        app.use(ElementPlus);
+        app.mount('#app');
+    </script>
+</body>
+</html>
