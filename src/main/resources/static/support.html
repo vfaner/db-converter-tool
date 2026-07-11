@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23667eea'/%3E%3Cstop offset='1' stop-color='%23764ba2'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cellipse cx='32' cy='16' rx='22' ry='9' fill='url(%23g)'/%3E%3Crect x='10' y='16' width='44' height='32' fill='url(%23g)'/%3E%3Cellipse cx='32' cy='48' rx='22' ry='9' fill='%23764ba2'/%3E%3Cellipse cx='32' cy='16' rx='22' ry='9' fill='%23667eea' opacity='0.9'/%3E%3Cellipse cx='32' cy='32' rx='22' ry='9' fill='none' stroke='%23fff' stroke-opacity='0.3' stroke-width='1.2'/%3E%3C/svg%3E">
+    <title>数据库信创改造工具 - 支持与更新</title>
+    <link rel="stylesheet" href="/libs/element-plus.index.css">
+    <script src="/libs/vue.global.js"></script>
+    <script src="/libs/element-plus.index.full.js"></script>
+    <script src="/libs/axios.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .app-container {
+            display: flex;
+            min-height: 100vh;
+        }
+        .sidebar {
+            width: 220px;
+            background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+            box-shadow: 2px 0 10px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+        }
+        .sidebar-header {
+            padding: 25px 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .sidebar-header h1 {
+            color: #fff;
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+        .sidebar-header p {
+            color: rgba(255,255,255,0.6);
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        .menu {
+            padding: 20px 0;
+            flex: 1;
+        }
+        .menu-item {
+            display: flex;
+            align-items: center;
+            padding: 15px 25px;
+            color: rgba(255,255,255,0.7);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border-left: 3px solid transparent;
+        }
+        .menu-item:hover {
+            background: rgba(255,255,255,0.05);
+            color: #fff;
+        }
+        .menu-item.active {
+            background: rgba(102, 126, 234, 0.2);
+            color: #fff;
+            border-left-color: #667eea;
+        }
+        .menu-icon {
+            width: 20px;
+            height: 20px;
+            margin-right: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .main-content {
+            flex: 1;
+            padding: 30px;
+            overflow-y: auto;
+        }
+        .page-header {
+            margin-bottom: 25px;
+        }
+        .page-header h2 {
+            color: #fff;
+            font-size: 28px;
+            font-weight: 600;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .page-header p {
+            color: rgba(255,255,255,0.8);
+            margin-top: 8px;
+            font-size: 14px;
+        }
+        .content-card {
+            background: #fff;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        .section {
+            margin-bottom: 35px;
+        }
+        .section:last-child {
+            margin-bottom: 0;
+        }
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+        }
+        .section-title::before {
+            content: '';
+            width: 4px;
+            height: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 2px;
+            margin-right: 10px;
+        }
+        .section-desc {
+            font-size: 14px;
+            color: #666;
+            line-height: 1.8;
+            margin-bottom: 18px;
+        }
+        .qr-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 760px;
+        }
+        .qr-wrapper img {
+            width: 100%;
+            max-width: 720px;
+            height: auto;
+            display: block;
+            object-fit: contain;
+            border-radius: 8px;
+            background: #fff;
+            padding: 12px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+        }
+        .qr-wrapper .qr-caption {
+            margin-top: 12px;
+            font-size: 13px;
+            color: #999;
+        }
+        .update-box {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px 24px;
+        }
+        .update-box .repo-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+            font-size: 15px;
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+            word-break: break-all;
+        }
+        .update-box .repo-link:hover {
+            text-decoration: underline;
+        }
+        .star-tip {
+            display: inline-block;
+            margin-top: 10px;
+            font-size: 13px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="app-container">
+            <!-- 左侧菜单 -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <h1>数据库改造工具</h1>
+                    <p>SQL智能转换平台</p>
+                </div>
+                <nav class="menu">
+                    <a href="/manual.html" class="menu-item">
+                        <span class="menu-icon">✏️</span>
+                        <span>手工处理</span>
+                    </a>
+                    <a href="/auto.html" class="menu-item">
+                        <span class="menu-icon">⚡</span>
+                        <span>自动处理</span>
+                    </a>
+                    <a href="/support.html" class="menu-item active">
+                        <span class="menu-icon">❤️</span>
+                        <span>支持与更新</span>
+                    </a>
+                </nav>
+            </aside>
+
+            <!-- 主内容区 -->
+            <main class="main-content">
+                <div class="page-header">
+                    <h2>支持与更新</h2>
+                    <p>感谢您使用数据库信创改造工具，您的支持是项目持续更新的动力</p>
+                </div>
+
+                <div class="content-card">
+                    <!-- 支持 -->
+                    <div class="section">
+                        <div class="section-title">☕ 支持</div>
+                        <div class="section-desc">
+                            如果这个项目对你有帮助，欢迎请我喝杯咖啡 ☕
+                        </div>
+                        <div class="qr-wrapper">
+                            <img src="/image/ds.png" alt="赞赏码">
+                            <div class="qr-caption">扫码请我喝杯咖啡</div>
+                        </div>
+                    </div>
+
+                    <!-- 更新 -->
+                    <div class="section">
+                        <div class="section-title">🔄 更新</div>
+                        <div class="update-box">
+                            <div class="section-desc" style="margin-bottom: 0;">
+                                如果对您有帮助，麻烦点一下 ⭐ Star，前往项目地址获取最新版本：
+                            </div>
+                            <a class="repo-link" href="https://github.com/vfaner/db-converter-tool" target="_blank" rel="noopener">
+                                🔗 https://github.com/vfaner/db-converter-tool
+                            </a>
+                            <div>
+                                <span class="star-tip">您的 Star 是对作者最大的鼓励 🌟</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+        const app = createApp({});
+        app.use(ElementPlus);
+        app.mount('#app');
+    </script>
+</body>
+</html>
