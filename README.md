@@ -17,6 +17,20 @@
 - 📁 **文件夹选择器**：可视化浏览和选择项目目录，无需手动输入路径
 - 🚀 **一键改造**：自动生成备份并执行批量替换
 
+## 🖼️ 效果展示
+
+### 手工处理
+
+<p align="center">
+  <img src="docs/db_xc_sd.png" alt="手工处理页面" width="800">
+</p>
+
+### 自动处理
+
+<p align="center">
+  <img src="docs/db_xc_zd.png" alt="自动处理页面" width="800">
+</p>
+
 ## 🛠️ 技术栈
 
 | 组件 | 技术 |
@@ -227,7 +241,7 @@ mvn test
 如果这个项目对你有帮助，欢迎请我喝杯咖啡 ☕
 
 <p align="center">
-  <img src="docs/ds.png" alt="打赏二维码" width="300">
+  <img src="docs/ds.png" alt="打赏二维码" width="600">
 </p>
 
 ## 📄 许可证

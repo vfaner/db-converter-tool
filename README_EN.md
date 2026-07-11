@@ -17,6 +17,20 @@ Database Migration Tool is a Spring Boot 3 web application that converts standar
 - 📁 **Folder Picker**: Visual directory browser — no need to type paths manually
 - 🚀 **One-click Migration**: Auto-generate backups and execute batch replacements
 
+## 🖼️ Screenshots
+
+### Manual Processing
+
+<p align="center">
+  <img src="docs/db_xc_sd.png" alt="Manual Processing Page" width="800">
+</p>
+
+### Automatic Processing
+
+<p align="center">
+  <img src="docs/db_xc_zd.png" alt="Automatic Processing Page" width="800">
+</p>
+
 ## 🛠️ Tech Stack
 
 | Component | Technology |
@@ -227,7 +241,7 @@ Issues and Pull Requests are welcome!
 If this project has been helpful to you, feel free to buy me a coffee ☕
 
 <p align="center">
-  <img src="docs/ds.png" alt="Donation QR Code" width="300">
+  <img src="docs/ds.png" alt="Donation QR Code" width="600">
 </p>
 
 ## 📄 License
