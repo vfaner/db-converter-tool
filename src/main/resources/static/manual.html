@@ -479,6 +479,7 @@
                     elapsed.value = 0;
                     thinkingChars.value = 0;
                     let aiStarted = false;   // AI 是否已开始输出正文（用于把基础结果换掉）
+                    let baseSql = '';       // 基础规则转换结果，AI 失败时退回到它
 
                     const startedAt = Date.now();
                     timer = setInterval(() => {
@@ -525,7 +526,8 @@
                                 } else if (evt.event === 'base') {
                                     // 基础规则转换已完成，立刻显示——这段是确定可用的结果，
                                     // 不能让用户对着空白框等 AI（之前就是这样，看起来像卡死）
-                                    result.value = evt.data.convertedSql || '';
+                                    baseSql = evt.data.convertedSql || '';
+                                    result.value = baseSql;
                                 } else if (evt.event === 'thinking') {
                                     thinkingChars.value = evt.data.chars || 0;
                                 } else if (evt.event === 'done') {
@@ -534,6 +536,9 @@
                                     result.value = evt.data.convertedSql || result.value;
                                 } else if (evt.event === 'error') {
                                     failure = evt.data.message || '未知错误';
+                                    // AI 失败时退回基础规则转换结果：那段是确定可用的。
+                                    // 留着 AI 吐了一半的内容更糟——它可能是被截断的残缺 SQL。
+                                    result.value = baseSql;
                                 }
                             }
                         }

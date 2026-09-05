@@ -162,7 +162,9 @@ public class ManualController {
             return Result.success(response);
         } catch (Exception e) {
             log.error("AI优化SQL失败", e);
-            return Result.error("AI优化SQL失败: " + e.getMessage());
+            // AiService 抛出的消息已经带了"AI优化SQL失败: "前缀，别再套一层
+            String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            return Result.error(message.startsWith("AI优化SQL失败") ? message : "AI优化SQL失败: " + message);
         }
     }
 

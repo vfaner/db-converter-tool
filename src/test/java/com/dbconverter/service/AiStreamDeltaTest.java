@@ -140,4 +140,71 @@ class AiStreamDeltaTest {
         assertTrue(body.contains("\"disabled\""));
         assertFalse(body.contains("\"stream\""));
     }
+
+    // ================= prompt 的最小改动约束 =================
+
+    @Test
+    @DisplayName("prompt 要求最小改动，不能授权模型重写")
+    void promptDemandsMinimalChange() {
+        String prompt = aiService.buildOptimizePrompt("SELECT IFNULL(a,0) FROM t", "mysql");
+
+        assertTrue(prompt.contains("最小改动"), "缺少最小改动约束: " + prompt);
+        // 这两句是原来措辞里招致"把 10 行查询重写成上百行"的根源，不能再出现
+        assertFalse(prompt.contains("优化SQL性能"), "prompt 又在要求性能优化，会招致整体重写");
+        assertFalse(prompt.contains("最佳实践"), "prompt 又在要求最佳实践，会招致整体重写");
+    }
+
+    @Test
+    @DisplayName("prompt 明确禁止会话变量和多语句")
+    void promptForbidsSessionVariables() {
+        String prompt = aiService.buildOptimizePrompt("SELECT 1", "mysql");
+
+        assertTrue(prompt.contains("@x :="), "缺少对会话变量写法的禁止: " + prompt);
+        assertTrue(prompt.contains("WITH RECURSIVE"), "缺少层次查询的正确替代写法指引");
+        assertTrue(prompt.contains("#{"), "缺少 MyBatis 占位符必须保留的要求");
+    }
+
+    @Test
+    @DisplayName("prompt 里带上目标数据库和待处理 SQL")
+    void promptCarriesInputs() {
+        String prompt = aiService.buildOptimizePrompt("SELECT NVL(a,0) FROM t WHERE id = #{x}", "dameng");
+
+        assertTrue(prompt.contains("dameng"));
+        assertTrue(prompt.contains("SELECT NVL(a,0) FROM t WHERE id = #{x}"));
+    }
+
+    // ================= 截断检测 =================
+
+    @Test
+    @DisplayName("Anthropic：message_delta 的 stop_reason=max_tokens 判定为截断")
+    void detectsAnthropicTruncation() {
+        assertEquals(Boolean.TRUE, aiService.detectTruncation(anthropicConfig(),
+                "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}"));
+    }
+
+    @Test
+    @DisplayName("Anthropic：正常结束不算截断")
+    void anthropicNormalEndIsNotTruncation() {
+        assertEquals(Boolean.FALSE, aiService.detectTruncation(anthropicConfig(),
+                "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}"));
+    }
+
+    @Test
+    @DisplayName("没有结束原因的事件返回 null，不能误判成正常结束")
+    void unknownStopReasonIsNull() {
+        assertNull(aiService.detectTruncation(anthropicConfig(),
+                "{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"x\"}}"));
+    }
+
+    @Test
+    @DisplayName("OpenAI：finish_reason=length 判定为截断")
+    void detectsOpenAiTruncation() {
+        AiConfig config = anthropicConfig();
+        config.setProtocol("openai");
+
+        assertEquals(Boolean.TRUE, aiService.detectTruncation(config,
+                "{\"choices\":[{\"finish_reason\":\"length\",\"delta\":{}}]}"));
+        assertEquals(Boolean.FALSE, aiService.detectTruncation(config,
+                "{\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{}}]}"));
+    }
 }

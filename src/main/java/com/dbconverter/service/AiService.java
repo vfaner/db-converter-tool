@@ -25,6 +25,14 @@ import java.util.concurrent.TimeUnit;
 public class AiService {
 
     private static final String ANTHROPIC_VERSION = "2023-06-01";
+
+    /**
+     * 截断提示。截断的 SQL 比没有结果更危险——它看起来像一条正常语句，
+     * 拿去执行才发现少了半截，所以一律丢弃并显式报错。
+     */
+    private static final String TRUNCATED_MESSAGE =
+            "AI 输出被「最大 Token 数」限制截断，结果不完整（已丢弃）。"
+                    + "请在「AI 配置」里加大该值，或把 SQL 拆短后分次转换";
     private static final String OCR_PROMPT =
             "请识别图片中的SQL语句，只返回SQL代码，不要有其他说明文字。如果图片中没有SQL语句，请返回空字符串。";
     /** 匹配 ```sql ... ``` 或 ``` ... ``` 围栏（含语言标注） */
@@ -155,17 +163,39 @@ public class AiService {
         }
     }
 
-    private String buildOptimizePrompt(String sourceSql, String targetDb) {
+    /**
+     * 拼接转换用的 prompt。
+     * <p>
+     * 这里的措辞是踩过坑改出来的。原来写的是"优化并转换为最佳兼容 SQL / 使用最佳实践 / 优化SQL性能"，
+     * 结果模型把它当成了重写授权：一条 10 行的 CONNECT BY 查询被改成上百行、
+     * 用 {@code @path := ...} 这类 MySQL 会话变量模拟递归（该写法在 8.0.13+ 已废弃，
+     * 且赋值求值顺序未定义，结果不可靠），还自己往 {@code SELECT NVL(a,0) FROM t} 后面加 {@code LIMIT 1}。
+     * <p>
+     * 用户要的不是重写，是方言适配：函数替换、语法调整，其余原样。所以现在给的是最小改动约束。
+     */
+    String buildOptimizePrompt(String sourceSql, String targetDb) {
         return String.format("""
-                你是一个数据库SQL专家，精通各种数据库方言。请将以下SQL语句优化并转换为 %s 数据库的最佳兼容SQL。
+                你是数据库方言迁移专家。下面这条 SQL 已经过规则引擎初步转换，目标数据库是 %s。
+                请检查并修正其中目标数据库无法正确执行的部分。
 
-                要求：
-                1. 保持原有业务逻辑不变
-                2. 使用目标数据库的最佳实践和函数
-                3. 优化SQL性能
-                4. 只返回转换后的SQL代码，不要有其他说明文字
+                最小改动原则（重要）：
+                1. 只改目标数据库确实不支持的写法，其余一律原样保留
+                2. 保留原有的缩进、换行、大小写、列顺序、别名和注释
+                3. 不要增删列，不要添加 LIMIT / ORDER BY / WHERE 条件，不要调整表连接顺序
+                4. 不要做性能优化、不要加索引提示、不要重构查询结构
+                5. 如果整条语句已经可以在目标数据库正确执行，就原样返回，不要改动
 
-                原始SQL：
+                禁止事项：
+                6. 禁止使用会话变量赋值（如 @x := ...）模拟逻辑——求值顺序未定义，结果不可靠
+                7. 禁止拆成多条语句、禁止使用临时表、存储过程、游标
+                8. MyBatis 占位符 #{...} 和 ${...} 必须逐字保留，不要替换成字面值或问号
+
+                层次查询等无法直接翻译的语法，优先使用目标数据库支持的标准写法
+                （例如 MySQL 8 / PostgreSQL 系用 WITH RECURSIVE），保持列名和输出结构与原语句一致。
+
+                只返回 SQL 本身，不要解释、不要 Markdown 围栏。
+
+                待处理 SQL：
                 %s
                 """, targetDb, sourceSql);
     }
@@ -446,6 +476,7 @@ public class AiService {
             String currentEvent = null;
             String line;
             int thinkingChars = 0;
+            Boolean truncated = null;   // 是否因 max_tokens 被截断，null = 还没收到结束原因
 
             // "多久没有任何进展"的死线。
             //
@@ -486,6 +517,9 @@ public class AiService {
                 SseDelta delta = config.isAnthropicProtocol()
                         ? extractAnthropicDelta(data)
                         : extractOpenAiDelta(data);
+                if (truncated == null) {
+                    truncated = detectTruncation(config, data);
+                }
                 if (delta == null || delta.text() == null || delta.text().isEmpty()) {
                     continue;
                 }
@@ -508,8 +542,41 @@ public class AiService {
                 }
                 throw new IOException("AI 未返回任何内容（流已结束但没有文本增量）");
             }
+            // 截断的 SQL 比没有结果更危险：它看起来像一条正常语句，拿去执行才发现少了半截。
+            // 必须显式报错，不能静默交付。
+            if (Boolean.TRUE.equals(truncated)) {
+                throw new IOException(String.format(
+                        "AI 输出在 %d token 处被截断，结果不完整（已丢弃）。"
+                                + "请在「AI 配置」里加大「最大 Token 数」，或把 SQL 拆短后分次转换",
+                        config.getMaxTokens() == null ? 0 : config.getMaxTokens()));
+            }
             return full.toString();
         }
+    }
+
+    /**
+     * 从一条 SSE data 里判断生成是否被 max_tokens 截断。
+     * 返回 null 表示这条数据里没有结束原因信息。
+     */
+    Boolean detectTruncation(AiConfig config, String data) {
+        JsonNode node = readSseJson(data);
+        if (node == null) {
+            return null;
+        }
+        if (config.isAnthropicProtocol()) {
+            // message_delta 里带 stop_reason；也兼容个别网关把它放在 message_stop 上
+            JsonNode reason = node.path("delta").path("stop_reason");
+            if (!reason.isTextual()) {
+                reason = node.path("message").path("stop_reason");
+            }
+            return reason.isTextual() ? "max_tokens".equals(reason.asText()) : null;
+        }
+        JsonNode choices = node.path("choices");
+        if (!choices.isArray() || choices.isEmpty()) {
+            return null;
+        }
+        JsonNode reason = choices.get(0).path("finish_reason");
+        return reason.isTextual() ? "length".equals(reason.asText()) : null;
     }
 
     /**
@@ -634,6 +701,9 @@ public class AiService {
         JsonNode responseJson = objectMapper.readTree(responseBody);
         JsonNode choices = responseJson.get("choices");
         if (choices != null && choices.isArray() && !choices.isEmpty()) {
+            if ("length".equals(choices.get(0).path("finish_reason").asText(""))) {
+                throw new IOException(TRUNCATED_MESSAGE);
+            }
             JsonNode messageNode = choices.get(0).get("message");
             if (messageNode != null && messageNode.has("content")) {
                 return messageNode.get("content").asText();
@@ -644,6 +714,9 @@ public class AiService {
 
     private String parseAnthropicResponse(String responseBody) throws IOException {
         JsonNode responseJson = objectMapper.readTree(responseBody);
+        if ("max_tokens".equals(responseJson.path("stop_reason").asText(""))) {
+            throw new IOException(TRUNCATED_MESSAGE);
+        }
         JsonNode content = responseJson.get("content");
         if (content != null && content.isArray() && !content.isEmpty()) {
             // 取第一个 text 类型的内容块
