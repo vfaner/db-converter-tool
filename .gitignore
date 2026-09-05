@@ -5,6 +5,9 @@
 # Build output
 target/
 
+# 发布物暂存目录（27MB 的 fat jar 走 GitHub Release 附件，不入库）
+dist/
+
 # Logs
 logs/
 *.log
