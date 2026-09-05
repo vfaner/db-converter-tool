@@ -21,7 +21,6 @@
 
     <properties>
         <java.version>17</java.version>
-        <jsqlparser.version>4.9</jsqlparser.version>
         <!-- lombok.version 由 spring-boot-dependencies 统一管理，此处不再覆盖 -->
     </properties>
 
@@ -43,13 +42,6 @@
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
-        </dependency>
-
-        <!-- JSqlParser for SQL parsing -->
-        <dependency>
-            <groupId>com.github.jsqlparser</groupId>
-            <artifactId>jsqlparser</artifactId>
-            <version>${jsqlparser.version}</version>
         </dependency>
 
         <!-- OkHttp for API calls -->

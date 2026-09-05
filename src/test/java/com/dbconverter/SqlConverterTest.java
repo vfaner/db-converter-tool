@@ -922,4 +922,58 @@ class SqlConverterTest {
     void newDialectsAreSupported() {
         assertTrue(sqlConverter.getSupportedDatabases().containsAll(java.util.List.of("golden", "mysql")));
     }
+
+    // ---- convert 与保形转换共用同一条路径 ----
+
+    @Test
+    @DisplayName("含 MyBatis 占位符时 convert 仍要转 AUTO_INCREMENT（原先走降级路径会静默漏掉）")
+    void convertHandlesAutoIncrementAlongsidePlaceholders() {
+        // #{tenantId} 让 JSqlParser 必然解析失败，而旧的降级路径少调了一次 convertSyntax，
+        // 于是 AUTO_INCREMENT 被原样留下——转换"看起来成功"，建表到达梦上必报错。
+        String result = sqlConverter.convert(
+                "CREATE TABLE t (id INT AUTO_INCREMENT, tenant VARCHAR(32) DEFAULT #{tenantId})", "dameng");
+        assertTrue(result.contains("IDENTITY(1,1)"), "应转成达梦的自增写法，实际: " + result);
+        assertFalse(result.toUpperCase().contains("AUTO_INCREMENT"), "不应残留 MySQL 写法: " + result);
+        assertTrue(result.contains("#{tenantId}"), "MyBatis 占位符必须原样保留: " + result);
+    }
+
+    @Test
+    @DisplayName("convert 不再重排 SQL：缩进、换行、类型括号都保持原样")
+    void convertPreservesOriginalFormatting() {
+        String source = """
+                SELECT a.id,
+                       NVL(a.name, '-') AS nm
+                  FROM users a
+                 WHERE a.del = '0'""";
+        String result = sqlConverter.convert(source, "dameng");
+        assertEquals(source, result, "达梦保留 NVL，这条语句应当逐字不变");
+    }
+
+    @Test
+    @DisplayName("convert 不再产出 VARCHAR (50) 这种多空格写法")
+    void convertDoesNotInjectSpaceBeforeTypeParens() {
+        // GaussDB 把 DECIMAL 映射成 NUMERIC，所以这里查的是 NUMERIC 的括号
+        String result = sqlConverter.convert(
+                "CREATE TABLE t (name VARCHAR(50), amt DECIMAL(10,2));", "gaussdb");
+        assertTrue(result.contains("VARCHAR(50)"), "实际: " + result);
+        assertTrue(result.contains("NUMERIC(10,2)"), "实际: " + result);
+        assertFalse(result.matches("(?s).*\\b(?:VARCHAR|NUMERIC|DECIMAL)\\s+\\(.*"),
+                "类型名和左括号之间不应插入空格，实际: " + result);
+    }
+
+    @Test
+    @DisplayName("convert 与 convertPreservingText 结果一致（只差结尾分号的补齐）")
+    void convertAgreesWithPreservingText() {
+        for (String db : java.util.List.of("dameng", "kingbase", "gaussdb", "mysql", "golden")) {
+            String sql = "SELECT NVL(a,0) FROM t WHERE d = #{id} AND ROWNUM <= 5";
+            assertEquals(sqlConverter.convertPreservingText(sql, db), sqlConverter.convert(sql, db),
+                    "两条入口对 " + db + " 的结果必须一致");
+        }
+    }
+
+    @Test
+    @DisplayName("原文结尾的分号要保住，避免 .sql 里两条语句粘连")
+    void convertKeepsTrailingSemicolon() {
+        assertTrue(sqlConverter.convert("SELECT NVL(a,0) FROM t;", "dameng").endsWith(";"));
+    }
 }

@@ -1,23 +1,6 @@
 package com.dbconverter.service;
 
 import lombok.extern.slf4j.Slf4j;
-import net.sf.jsqlparser.JSQLParserException;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
-import net.sf.jsqlparser.statement.Statement;
-import net.sf.jsqlparser.expression.Function;
-import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
-import net.sf.jsqlparser.schema.Column;
-import net.sf.jsqlparser.expression.*;
-import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
-import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
-import net.sf.jsqlparser.expression.operators.relational.*;
-import net.sf.jsqlparser.statement.select.*;
-import net.sf.jsqlparser.statement.insert.Insert;
-import net.sf.jsqlparser.statement.update.Update;
-import net.sf.jsqlparser.statement.delete.Delete;
-import net.sf.jsqlparser.statement.create.table.CreateTable;
-import net.sf.jsqlparser.statement.create.table.ColumnDefinition;
-import net.sf.jsqlparser.statement.alter.Alter;
 import org.springframework.stereotype.Service;
 import jakarta.annotation.PostConstruct;
 import java.util.*;
@@ -43,20 +26,24 @@ public class SqlConverter {
         dialectConfigs.put("mysql", createMysqlConfig());
     }
 
+    /**
+     * 手工处理入口。
+     * <p>
+     * 这里曾经先用 JSqlParser 解析、再对 {@code statement.toString()} 套正则，解析失败才降级。
+     * 但 AST 从来没有参与实际改写——{@code convertStatement} 只是"toString 之后套同一批正则"，
+     * 所以那一层解析不提供任何转换能力，只带来三样纯损失：
+     * <ul>
+     *   <li>{@code toString()} 会重排 SQL，抹掉用户自己的缩进和换行，还会产出
+     *       {@code VARCHAR (50)}、{@code DECIMAL (10, 2)} 这种多一个空格的写法；</li>
+     *   <li>凡是含 MyBatis {@code #{}} 的语句必然解析失败，每次都往日志里丢一整段
+     *       多行 ParseException——那本来是设计好的正常降级路径，不是故障；</li>
+     *   <li>降级路径与 AST 路径的替换步骤长期不一致（降级少调了一次 {@code convertSyntax}，
+     *       于是解析失败的语句静默丢掉 AUTO_INCREMENT 转换），属于"改动只落在一条路径上"的老问题。</li>
+     * </ul>
+     * 现在与保形转换共用同一条实现，全项目只剩一条转换路径。
+     */
     public String convert(String sourceSql, String targetDb) {
-        DialectConfig config = requireConfig(sourceSql, targetDb);
-
-        String converted;
-        try {
-            // 尝试使用 JSqlParser 解析
-            Statement statement = CCJSqlParserUtil.parse(sourceSql);
-            converted = convertStatement(statement, config);
-        } catch (JSQLParserException e) {
-            log.warn("JSqlParser 解析失败，使用正则降级: {}", e.getMessage());
-            converted = convertByRegex(sourceSql, config);
-        }
-
-        return preserveStatementTerminator(sourceSql, converted);
+        return preserveStatementTerminator(sourceSql, convertPreservingText(sourceSql, targetDb));
     }
 
     /**
@@ -67,8 +54,7 @@ public class SqlConverter {
      * 走 {@link #convert} 的话 {@code statement.toString()} 会把这些全部抹平，
      * 写回去等于毁掉 mapper 和 Java 源码。
      * <p>
-     * 注意 {@code convertStatement} 本身也只是"toString 之后套同一批正则"，
-     * AST 并未参与实际改写，所以这里跳过解析不会损失任何转换能力。
+     * 手工处理的 {@link #convert} 现在也共用这条实现，全项目只有一条转换路径。
      */
     public String convertPreservingText(String rawSql, String targetDb) {
         DialectConfig config = requireConfig(rawSql, targetDb);
@@ -98,11 +84,9 @@ public class SqlConverter {
     /**
      * 还原语句结尾的分号。
      * <p>
-     * JSqlParser 的 {@code Statement.toString()} 不会输出结尾分号，
-     * 而自动处理是把转换结果原样替换回原文的——原文的 {@code ;} 一旦丢失，
-     * .sql 脚本里相邻的两条语句就会粘连成一条。
-     * <p>
-     * 正则降级路径本身会保留分号，所以这里只在"原文有、结果没有"时补，保证幂等。
+     * 现在的转换路径是纯文本替换，本来就不会丢分号，所以这一步实际是个幂等的安全网：
+     * 只在"原文有分号、结果没有"时补上。留着它是因为 .sql 脚本里一旦丢掉分号，
+     * 相邻两条语句就会粘连成一条，代价远大于多留这几行判断。
      */
     private String preserveStatementTerminator(String sourceSql, String converted) {
         if (converted == null) return null;
@@ -111,21 +95,6 @@ public class SqlConverter {
         String trimmedEnd = converted.stripTrailing();
         if (trimmedEnd.endsWith(";")) return converted;
         return trimmedEnd + ";";
-    }
-
-    private String convertStatement(Statement statement, DialectConfig config) {
-        String sql = statement.toString();
-
-        // 函数替换
-        sql = convertFunctions(sql, config);
-
-        // 类型替换
-        sql = convertTypes(sql, config);
-
-        // 语法替换（如 LIMIT）
-        sql = convertSyntax(sql, config);
-
-        return sql;
     }
 
     private String convertFunctions(String sql, DialectConfig config) {
@@ -1036,19 +1005,6 @@ public class SqlConverter {
             result = replaceOutsideLiterals(result, autoIncPattern, autoIncSyntax);
         }
 
-        return result;
-    }
-
-    /**
-     * JSqlParser 解析失败时的降级路径。
-     * <p>函数/类型/LIMIT 的替换规则与 AST 路径完全一致，直接复用同一批方法——
-     * 早先这里抄了一份独立实现，导致修复只落在一条路径上（例如 NOW() 的括号问题）。
-     */
-    private String convertByRegex(String sql, DialectConfig config) {
-        String result = sql;
-        result = convertFunctions(result, config);
-        result = convertTypes(result, config);
-        result = convertLimit(result, config);
         return result;
     }
 
