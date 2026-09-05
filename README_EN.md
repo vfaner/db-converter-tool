@@ -109,7 +109,7 @@ mvn clean package
 ### 4. Run
 
 ```bash
-java -jar target/db-converter-tool-1.0.0.jar
+java -jar target/db-converter-tool-1.0.1.jar
 ```
 
 Or run directly with Maven:
@@ -280,19 +280,19 @@ Build on a machine **with internet access**, then carry only the jar into the is
 ```bash
 # Internet-connected machine
 mvn clean package -DskipTests
-# Artifact: target/db-converter-tool-1.0.0.jar -- this single file is all you need
+# Artifact: target/db-converter-tool-1.0.1.jar -- this single file is all you need
 
 # Air-gapped machine
 mkdir -p /opt/db-converter && cd /opt/db-converter
 # Drop the jar in and start
-java -jar db-converter-tool-1.0.0.jar
+java -jar db-converter-tool-1.0.1.jar
 ```
 
 On first startup two directories are created **relative to the current working directory**, so `cd` into your intended data location before starting:
 
 ```
 /opt/db-converter/
-├── db-converter-tool-1.0.0.jar
+├── db-converter-tool-1.0.1.jar
 ├── config/ai-config.json          # Persisted AI config; survives jar upgrades
 └── logs/db-converter.log          # Logs
 ```
@@ -302,7 +302,7 @@ On first startup two directories are created **relative to the current working d
 To pin absolute paths instead of depending on the working directory:
 
 ```bash
-java -jar db-converter-tool-1.0.0.jar \
+java -jar db-converter-tool-1.0.1.jar \
      --app.ai.config-file=/etc/db-converter/ai-config.json \
      --logging.file.name=/var/log/db-converter/db-converter.log
 ```
@@ -314,9 +314,9 @@ For safety — this tool can browse arbitrary directories and rewrite files in p
 To let others on the network reach it, override explicitly:
 
 ```bash
-SERVER_ADDRESS=0.0.0.0 java -jar db-converter-tool-1.0.0.jar
+SERVER_ADDRESS=0.0.0.0 java -jar db-converter-tool-1.0.1.jar
 # or
-java -jar db-converter-tool-1.0.0.jar --server.address=0.0.0.0
+java -jar db-converter-tool-1.0.1.jar --server.address=0.0.0.0
 ```
 
 > ⚠️ **Assess the risk before opening it up.** `GET /api/directories?path=/` can enumerate any directory on the server, and `/api/replace/*` can rewrite files in place. Opening the bind address effectively grants filesystem read/write capability to everyone on the same segment. Restrict it to a trusted segment, or put an authenticating reverse proxy / firewall allowlist in front of it.

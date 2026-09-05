@@ -109,7 +109,7 @@ mvn clean package
 ### 4. 运行应用
 
 ```bash
-java -jar target/db-converter-tool-1.0.0.jar
+java -jar target/db-converter-tool-1.0.1.jar
 ```
 
 或使用 Maven 直接运行：
@@ -280,19 +280,19 @@ logging:
 ```bash
 # 外网机器
 mvn clean package -DskipTests
-# 产物：target/db-converter-tool-1.0.0.jar —— 只需拷贝这一个文件
+# 产物：target/db-converter-tool-1.0.1.jar —— 只需拷贝这一个文件
 
 # 内网机器
 mkdir -p /opt/db-converter && cd /opt/db-converter
 # 放入 jar 后直接启动
-java -jar db-converter-tool-1.0.0.jar
+java -jar db-converter-tool-1.0.1.jar
 ```
 
 首次启动会在**当前工作目录**下自动生成两个目录，所以请先 `cd` 到你希望存放数据的位置再启动：
 
 ```
 /opt/db-converter/
-├── db-converter-tool-1.0.0.jar
+├── db-converter-tool-1.0.1.jar
 ├── config/ai-config.json          # AI 配置持久化，升级换 jar 不会丢
 └── logs/db-converter.log          # 日志
 ```
@@ -302,7 +302,7 @@ java -jar db-converter-tool-1.0.0.jar
 如需固定路径而不依赖启动目录：
 
 ```bash
-java -jar db-converter-tool-1.0.0.jar \
+java -jar db-converter-tool-1.0.1.jar \
      --app.ai.config-file=/etc/db-converter/ai-config.json \
      --logging.file.name=/var/log/db-converter/db-converter.log
 ```
@@ -314,9 +314,9 @@ java -jar db-converter-tool-1.0.0.jar \
 若需让内网其他同事访问，必须显式覆盖：
 
 ```bash
-SERVER_ADDRESS=0.0.0.0 java -jar db-converter-tool-1.0.0.jar
+SERVER_ADDRESS=0.0.0.0 java -jar db-converter-tool-1.0.1.jar
 # 或
-java -jar db-converter-tool-1.0.0.jar --server.address=0.0.0.0
+java -jar db-converter-tool-1.0.1.jar --server.address=0.0.0.0
 ```
 
 > ⚠️ **放开前请务必评估风险**：`GET /api/directories?path=/` 可遍历服务器上任意目录，`/api/replace/*` 可就地改写文件。放开监听等同于把该机器的文件系统读写能力开放给同网段所有人。建议仅在可信网段内放开，或叠加反向代理鉴权 / 防火墙白名单。
