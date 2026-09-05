@@ -668,4 +668,102 @@ class SqlConverterTest {
         assertEquals(aliased, sqlConverter.convertPreservingText(aliased, "gaussdb"),
                 "隐式别名 text 不是类型声明");
     }
+
+    // ---- DATE_FORMAT 格式串 ----
+    // 只换函数名不换格式串会产出 TO_CHAR(d, '%Y-%m-%d')：达梦报格式串非法，
+    // 金仓/GaussDB 把 %Y 原样打印。这类"转换成功、执行必错"的结果必须挡住。
+
+    @ParameterizedTest
+    @ValueSource(strings = {"dameng", "kingbase", "gaussdb"})
+    @DisplayName("DATE_FORMAT 转 TO_CHAR 时格式串同步翻译")
+    void dateFormatPatternIsTranslatedForToCharDialects(String targetDb) {
+        String result = sqlConverter.convertPreservingText(
+                "SELECT DATE_FORMAT(create_time, '%Y-%m-%d %H:%i:%s') FROM t", targetDb);
+
+        assertTrue(result.contains("TO_CHAR("), result);
+        assertTrue(result.contains("'YYYY-MM-DD HH24:MI:SS'"),
+                "格式串必须一起翻成 TO_CHAR 写法: " + result);
+        assertFalse(result.contains("%"), "不允许残留 MySQL 格式符: " + result);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"tidb", "oceanbase", "gbase", "shentong"})
+    @DisplayName("保留 DATE_FORMAT 的方言不得改格式串")
+    void dateFormatPatternIsLeftAloneWhenFunctionIsKept(String targetDb) {
+        String sql = "SELECT DATE_FORMAT(create_time, '%Y-%m-%d') FROM t";
+        assertEquals(sql, sqlConverter.convertPreservingText(sql, targetDb),
+                "目标方言仍用 MySQL 的 DATE_FORMAT，格式串就该原样保留");
+    }
+
+    @Test
+    @DisplayName("%i 是分钟，不能当成月份")
+    void minuteSpecifierIsNotConfusedWithMonth() {
+        assertEquals("HH24:MI", SqlConverter.translateMysqlDatePattern("%H:%i"));
+    }
+
+    @Test
+    @DisplayName("中文年月日等字面文本要加双引号，否则达梦报格式串非法")
+    void literalTextIsDoubleQuoted() {
+        assertEquals("YYYY\"年\"MM\"月\"DD\"日\"",
+                SqlConverter.translateMysqlDatePattern("%Y年%m月%d日"));
+        assertEquals("YYYY-MM-DD\"T\"HH24:MI:SS",
+                SqlConverter.translateMysqlDatePattern("%Y-%m-%dT%H:%i:%s"));
+    }
+
+    @Test
+    @DisplayName("横杠冒号斜杠空格等标点可以裸写，不必加引号")
+    void barePunctuationIsNotQuoted() {
+        assertEquals("YYYY/MM/DD", SqlConverter.translateMysqlDatePattern("%Y/%m/%d"));
+        assertEquals("YYYY-MM-DD HH24:MI:SS",
+                SqlConverter.translateMysqlDatePattern("%Y-%m-%d %H:%i:%s"));
+    }
+
+    @Test
+    @DisplayName("%% 是一个 % 字面量")
+    void escapedPercentBecomesLiteral() {
+        assertEquals("YYYY\"%\"", SqlConverter.translateMysqlDatePattern("%Y%%"));
+    }
+
+    @Test
+    @DisplayName("不认识的格式符原样留下，不瞎猜")
+    void unknownSpecifierIsKeptVerbatim() {
+        // %f 微秒在 Oracle 系是 FF6、PG 系是 US，两族分歧，猜错比不翻更难排查
+        assertEquals("SS\"%f\"", SqlConverter.translateMysqlDatePattern("%s%f"));
+    }
+
+    @Test
+    @DisplayName("格式串已含双引号时放弃翻译，避免产出畸形格式串")
+    void patternWithDoubleQuoteIsNotTranslated() {
+        assertNull(SqlConverter.translateMysqlDatePattern("%Y\"x\""));
+    }
+
+    @Test
+    @DisplayName("格式串是变量或占位符时原样保留")
+    void nonLiteralFormatArgumentIsUntouched() {
+        String withVariable = "SELECT DATE_FORMAT(create_time, fmt) FROM t";
+        assertTrue(sqlConverter.convertPreservingText(withVariable, "dameng")
+                .contains("TO_CHAR(create_time, fmt)"), "只换函数名，参数不动");
+
+        String withPlaceholder = "SELECT DATE_FORMAT(create_time, #{fmt}) FROM t";
+        assertTrue(sqlConverter.convertPreservingText(withPlaceholder, "dameng")
+                .contains("#{fmt}"), "MyBatis 占位符不得被改写");
+    }
+
+    @Test
+    @DisplayName("字符串字面量里的 DATE_FORMAT 不参与替换")
+    void dateFormatInsideStringLiteralIsIgnored() {
+        String sql = "SELECT 'DATE_FORMAT(x, ''%Y'')' AS note FROM t";
+        assertEquals(sql, sqlConverter.convertPreservingText(sql, "dameng"));
+    }
+
+    @Test
+    @DisplayName("一条语句里多次 DATE_FORMAT 全部翻译")
+    void everyDateFormatCallIsTranslated() {
+        String result = sqlConverter.convertPreservingText(
+                "SELECT DATE_FORMAT(a, '%Y-%m') AS m, DATE_FORMAT(b, '%H:%i') AS t FROM x",
+                "dameng");
+
+        assertTrue(result.contains("'YYYY-MM'"), result);
+        assertTrue(result.contains("'HH24:MI'"), result);
+    }
 }

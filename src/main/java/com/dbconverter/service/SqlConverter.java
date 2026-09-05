@@ -129,6 +129,15 @@ public class SqlConverter {
     private String convertFunctions(String sql, DialectConfig config) {
         String result = sql;
 
+        // DATE_FORMAT 的格式串是 MySQL 私有写法（'%Y-%m-%d'）。目标方言若把它换成 TO_CHAR，
+        // 光改函数名是不够的：TO_CHAR(d, '%Y-%m-%d') 在达梦/Oracle 系会因格式串非法而报错，
+        // 在 PG 系（金仓/GaussDB）则会把 %Y 原样打印出来。转换"看起来成功、执行必错"是最坏的情况，
+        // 所以必须趁函数还叫 DATE_FORMAT（能确定格式串是 MySQL 方言）时先把格式串翻掉。
+        String dateFormatTarget = config.functions == null ? null : config.functions.get("DATE_FORMAT");
+        if (dateFormatTarget != null && !"DATE_FORMAT".equalsIgnoreCase(dateFormatTarget)) {
+            result = convertDateFormatPatterns(result);
+        }
+
         for (Map.Entry<String, String> entry : config.functions.entrySet()) {
             String sourceFunc = entry.getKey().toUpperCase();
             String targetFunc = entry.getValue();
@@ -169,6 +178,117 @@ public class SqlConverter {
         }
 
         return result;
+    }
+
+    /** 一次 DATE_FORMAT 调用；参数里不允许再嵌套括号，嵌套的场合交给下面的字面量判定兜底。 */
+    private static final Pattern DATE_FORMAT_CALL = Pattern.compile(
+            "\\bDATE_FORMAT\\s*\\(([^()]*)\\)",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    /** 参数列表末尾的字符串字面量，即 DATE_FORMAT 的格式串。{@code ''} 是 SQL 里的转义单引号。 */
+    private static final Pattern TRAILING_FORMAT_LITERAL = Pattern.compile(
+            "'((?:[^']|'')*)'\\s*$"
+    );
+
+    /**
+     * MySQL DATE_FORMAT 格式符 -> TO_CHAR 格式符。
+     * <p>这里每一项在 Oracle 系（达梦）和 PostgreSQL 系（金仓、GaussDB）的 TO_CHAR 里写法一致，
+     * 因此一张表足够覆盖三个方言。刻意不收录 {@code %f}（微秒）之类两族写法分歧的格式符
+     * （Oracle 是 {@code FF6}、PG 是 {@code US}），猜错比不翻更难排查。
+     */
+    private static final Map<Character, String> MYSQL_DATE_SPECIFIERS = Map.ofEntries(
+            Map.entry('Y', "YYYY"),   // 四位年
+            Map.entry('y', "YY"),     // 两位年
+            Map.entry('m', "MM"),     // 月，补零
+            Map.entry('d', "DD"),     // 日，补零
+            Map.entry('H', "HH24"),   // 时，24 小时制
+            Map.entry('k', "HH24"),
+            Map.entry('h', "HH12"),   // 时，12 小时制
+            Map.entry('I', "HH12"),
+            Map.entry('i', "MI"),     // 分（注意不是月份）
+            Map.entry('s', "SS"),     // 秒
+            Map.entry('S', "SS"),
+            Map.entry('M', "MONTH"),  // 月份全称
+            Map.entry('b', "MON"),    // 月份缩写
+            Map.entry('W', "DAY"),    // 星期全称
+            Map.entry('a', "DY"),     // 星期缩写
+            Map.entry('j', "DDD"),    // 年内第几天
+            Map.entry('p', "AM"),     // 上下午标记
+            Map.entry('T', "HH24:MI:SS")
+    );
+
+    /**
+     * 在 TO_CHAR 格式串里可以裸着出现的标点。其余字面文本（例如中文的"年月日"、
+     * ISO 8601 里的 {@code T}）在 Oracle 系必须用双引号括起来，否则报格式串非法；
+     * PG 系同样接受双引号形式，所以统一加引号对两族都安全。
+     */
+    private static final String TO_CHAR_BARE_PUNCTUATION = "-/,.;: ";
+
+    /**
+     * 把 SQL 里 DATE_FORMAT 调用的格式串翻成 TO_CHAR 的写法，函数名留给通用映射去改。
+     */
+    private String convertDateFormatPatterns(String sql) {
+        return replaceOutsideLiterals(sql, DATE_FORMAT_CALL, m -> {
+            String args = m.group(1);
+            Matcher literal = TRAILING_FORMAT_LITERAL.matcher(args);
+            // 第二参不是字面量（变量、MyBatis 占位符、函数调用）时无从下手，原样保留不瞎猜
+            if (!literal.find()) return m.group();
+
+            String translated = translateMysqlDatePattern(literal.group(1));
+            if (translated == null || translated.equals(literal.group(1))) return m.group();
+
+            int argsOffset = m.start(1) - m.start();
+            return m.group().substring(0, argsOffset + literal.start())
+                    + "'" + translated + "'"
+                    + m.group().substring(argsOffset + literal.end());
+        });
+    }
+
+    /**
+     * 翻译单个格式串。返回 {@code null} 表示放弃翻译（调用方保留原样）。
+     */
+    public static String translateMysqlDatePattern(String pattern) {
+        // 原串已含双引号，再套一层引用规则容易产出畸形格式串，直接不碰
+        if (pattern.indexOf('"') >= 0) return null;
+
+        StringBuilder out = new StringBuilder(pattern.length() + 8);
+        StringBuilder literalRun = new StringBuilder();
+
+        for (int i = 0; i < pattern.length(); i++) {
+            char c = pattern.charAt(i);
+
+            if (c == '%' && i + 1 < pattern.length()) {
+                char spec = pattern.charAt(++i);
+                String mapped = MYSQL_DATE_SPECIFIERS.get(spec);
+                if (mapped != null) {
+                    flushLiteralRun(out, literalRun);
+                    out.append(mapped);
+                } else if (spec == '%') {
+                    literalRun.append('%');          // %% 是转义出来的一个 % 字面量
+                } else {
+                    literalRun.append('%').append(spec);  // 不认识的格式符原样留下，宁可显眼也不猜
+                }
+                continue;
+            }
+
+            if (TO_CHAR_BARE_PUNCTUATION.indexOf(c) >= 0) {
+                flushLiteralRun(out, literalRun);
+                out.append(c);
+            } else {
+                literalRun.append(c);
+            }
+        }
+
+        flushLiteralRun(out, literalRun);
+        return out.toString();
+    }
+
+    /** 把攒下的字面文本作为一段带双引号的常量写出。 */
+    private static void flushLiteralRun(StringBuilder out, StringBuilder literalRun) {
+        if (literalRun.length() == 0) return;
+        out.append('"').append(literalRun).append('"');
+        literalRun.setLength(0);
     }
 
     private String convertTypes(String sql, DialectConfig config) {
