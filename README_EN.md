@@ -32,6 +32,18 @@ Database Migration Tool is a Spring Boot 3 web application that converts standar
   <img src="docs/db_xc_zd.png" alt="Automatic Processing Page" width="800">
 </p>
 
+### AI Configuration Management
+
+<p align="center">
+  <img src="docs/db_xc_ai.png" alt="AI Configuration List Page" width="800">
+</p>
+
+### Adding an AI Configuration
+
+<p align="center">
+  <img src="docs/db_xc_ai_add.png" alt="Add AI Configuration Dialog" width="800">
+</p>
+
 ## 🛠️ Tech Stack
 
 | Component | Technology |

@@ -31,6 +31,18 @@
   <img src="docs/db_xc_zd.png" alt="自动处理页面" width="800">
 </p>
 
+### AI 配置管理
+
+<p align="center">
+  <img src="docs/db_xc_ai.png" alt="AI 配置列表页面" width="800">
+</p>
+
+### 新增 AI 配置
+
+<p align="center">
+  <img src="docs/db_xc_ai_add.png" alt="新增 AI 配置弹窗" width="800">
+</p>
+
 ## 🛠️ 技术栈
 
 | 组件 | 技术 |
