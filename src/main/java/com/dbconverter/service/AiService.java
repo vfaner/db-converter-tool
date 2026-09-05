@@ -146,6 +146,13 @@ public class AiService {
      */
     public interface StreamListener {
         void onDelta(String text) throws IOException;
+
+        /**
+         * 模型正在思考、还没开始输出正文时的进度通知（累计思考字数）。
+         * 只有网关无视 thinking:disabled 时才会触发，默认忽略。
+         */
+        default void onThinking(int totalChars) throws IOException {
+        }
     }
 
     private String buildOptimizePrompt(String sourceSql, String targetDb) {
@@ -323,7 +330,7 @@ public class AiService {
         return buildAnthropicTextRequest(config, model, prompt, false);
     }
 
-    private String buildAnthropicTextRequest(AiConfig config, String model, String prompt, boolean stream)
+    String buildAnthropicTextRequest(AiConfig config, String model, String prompt, boolean stream)
             throws IOException {
         ObjectNode requestBody = objectMapper.createObjectNode();
         requestBody.put("model", model);
@@ -334,6 +341,11 @@ public class AiService {
         if (stream) {
             requestBody.put("stream", true);
         }
+        // 显式关掉扩展思考。这不是可选的调优，是"页面转圈好几分钟"的根因：
+        // 服务端默认开思考，实测同一条 SQL 会先流 2368 条 thinking_delta、思考 4371 字，
+        // 315 秒之后才吐出第一个字的正文；关掉之后首字 1.87 秒、全程 8.7 秒。
+        // SQL 方言转换是规则性改写，不需要模型长链推理。
+        requestBody.set("thinking", objectMapper.createObjectNode().put("type", "disabled"));
 
         ArrayNode messages = objectMapper.createArrayNode();
         ObjectNode message = objectMapper.createObjectNode();
@@ -433,18 +445,22 @@ public class AiService {
             StringBuilder full = new StringBuilder();
             String currentEvent = null;
             String line;
+            int thinkingChars = 0;
 
-            // 首字延迟单独设闸门。readTimeout 只能判定"多久没有任何字节"，
-            // 而网关过载时会一边发心跳保活、一边迟迟不出内容——实测能这样吊住 7 分钟以上不断开，
-            // 光靠 readTimeout 永远等不到超时。所以另记一个"第一个字必须在 N 秒内到"的死线。
+            // "多久没有任何进展"的死线。
+            //
+            // 这里原来写的是"第一个字必须在 N 秒内到"，那是个会误杀的实现：模型开启扩展思考时，
+            // 流上持续跑 thinking_delta（实测 2368 条、315 秒后才出正文），正文迟迟不来是正常的，
+            // 旧逻辑却把这种请求当成服务端过载给砍了——用户看到的"120 秒超时"就是这么来的。
+            // 现在思考增量同样算进展：只有连一个 thinking/text 增量都收不到才判超时。
             long deadlineNanos = TimeUnit.SECONDS.toNanos(resolveTimeout(config.getTimeout()));
-            long startNanos = System.nanoTime();
+            long lastProgressNanos = System.nanoTime();
 
             while ((line = source.readUtf8Line()) != null) {
-                if (full.length() == 0 && System.nanoTime() - startNanos > deadlineNanos) {
+                if (System.nanoTime() - lastProgressNanos > deadlineNanos) {
                     throw new IOException(String.format(
-                            "已连上 AI 服务，但 %d 秒内没有收到任何内容（服务端通常是排队或过载）。"
-                                    + "可稍后重试，或在「AI 配置」里加大超时时间",
+                            "已连上 AI 服务，但 %d 秒内没有收到任何增量内容。可稍后重试，"
+                                    + "或在「AI 配置」里加大超时时间",
                             resolveTimeout(config.getTimeout())));
                 }
                 if (line.isEmpty()) {
@@ -467,16 +483,29 @@ public class AiService {
                     throw new IOException("AI 返回错误: " + extractErrorMessage(data));
                 }
 
-                String delta = config.isAnthropicProtocol()
+                SseDelta delta = config.isAnthropicProtocol()
                         ? extractAnthropicDelta(data)
                         : extractOpenAiDelta(data);
-                if (delta != null && !delta.isEmpty()) {
-                    full.append(delta);
-                    listener.onDelta(delta);
+                if (delta == null || delta.text() == null || delta.text().isEmpty()) {
+                    continue;
                 }
+                lastProgressNanos = System.nanoTime();
+                if (delta.thinking()) {
+                    // 正常情况下请求里已带 thinking:disabled，走不到这儿。
+                    // 但网关未必认这个字段（这个网关连 model 都是忽略的），所以留一条兜底：
+                    // 把思考进度报给前端，让页面显示"思考中"而不是空白转圈。
+                    thinkingChars += delta.text().length();
+                    listener.onThinking(thinkingChars);
+                    continue;
+                }
+                full.append(delta.text());
+                listener.onDelta(delta.text());
             }
 
             if (full.length() == 0) {
+                if (thinkingChars > 0) {
+                    throw new IOException("AI 只输出了思考内容（" + thinkingChars + " 字）就结束了，没有给出正文；请重试");
+                }
                 throw new IOException("AI 未返回任何内容（流已结束但没有文本增量）");
             }
             return full.toString();
@@ -484,10 +513,17 @@ public class AiService {
     }
 
     /**
-     * 从 Anthropic SSE 的一条 data 里取增量文本。
-     * 只认 content_block_delta 的 text_delta；thinking / tool_use 等块一律跳过。
+     * 一条 SSE 增量。{@code thinking=true} 表示这是模型的思考过程而非最终正文，
+     * 不能计入结果，但要算作"有进展"。
      */
-    private String extractAnthropicDelta(String data) throws IOException {
+    record SseDelta(String text, boolean thinking) {
+    }
+
+    /**
+     * 从 Anthropic SSE 的一条 data 里取增量。
+     * text_delta 是正文；thinking_delta 是思考过程，单独标记出来（既不能计入结果，也不能当成"没进展"）。
+     */
+    SseDelta extractAnthropicDelta(String data) throws IOException {
         JsonNode node = readSseJson(data);
         if (node == null) {
             return null;
@@ -500,13 +536,20 @@ public class AiService {
             return null;
         }
         JsonNode delta = node.path("delta");
-        return delta.has("text") ? delta.get("text").asText() : null;
+        if (delta.hasNonNull("thinking")) {
+            return new SseDelta(delta.get("thinking").asText(), true);
+        }
+        if (delta.hasNonNull("text")) {
+            return new SseDelta(delta.get("text").asText(), false);
+        }
+        return null;               // signature_delta / tool_use 等，跳过
     }
 
     /**
-     * 从 OpenAI SSE 的一条 data 里取增量文本
+     * 从 OpenAI SSE 的一条 data 里取增量。
+     * 国产推理模型（DeepSeek-R1 一类）把思考放在 {@code reasoning_content} 里，一并识别。
      */
-    private String extractOpenAiDelta(String data) throws IOException {
+    SseDelta extractOpenAiDelta(String data) throws IOException {
         JsonNode node = readSseJson(data);
         if (node == null) {
             return null;
@@ -518,8 +561,13 @@ public class AiService {
         if (!choices.isArray() || choices.isEmpty()) {
             return null;
         }
-        JsonNode content = choices.get(0).path("delta").path("content");
-        return content.isTextual() ? content.asText() : null;
+        JsonNode delta = choices.get(0).path("delta");
+        JsonNode reasoning = delta.path("reasoning_content");
+        if (reasoning.isTextual() && !reasoning.asText().isEmpty()) {
+            return new SseDelta(reasoning.asText(), true);
+        }
+        JsonNode content = delta.path("content");
+        return content.isTextual() ? new SseDelta(content.asText(), false) : null;
     }
 
     /**

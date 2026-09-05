@@ -195,12 +195,25 @@ public class ManualController {
                 send(emitter, "base", Map.of("convertedSql", convertedSql));
 
                 String optimized = aiService.optimizeSqlStreaming(convertedSql, request.getTargetDb(),
-                        delta -> {
-                            if (clientGone.get()) {
-                                // 前端已经关掉/点了中断，没必要再让模型继续跑
-                                throw new IOException("客户端已断开");
+                        new AiService.StreamListener() {
+                            @Override
+                            public void onDelta(String delta) throws IOException {
+                                abortIfClientGone();
+                                send(emitter, "delta", Map.of("text", delta));
                             }
-                            send(emitter, "delta", Map.of("text", delta));
+
+                            @Override
+                            public void onThinking(int totalChars) throws IOException {
+                                abortIfClientGone();
+                                send(emitter, "thinking", Map.of("chars", totalChars));
+                            }
+
+                            private void abortIfClientGone() throws IOException {
+                                if (clientGone.get()) {
+                                    // 前端已经关掉/点了中断，没必要再让模型继续跑
+                                    throw new IOException("客户端已断开");
+                                }
+                            }
                         });
 
                 send(emitter, "done", Map.of("convertedSql", optimized));

@@ -347,7 +347,7 @@
                             <span class="result-title">
                                 转换结果
                                 <span v-if="streaming" style="font-weight: normal; color: #909399; font-size: 13px;">
-                                    · AI 生成中 {{ elapsed }}s
+                                    · <template v-if="thinkingChars > 0">模型思考中（已 {{ thinkingChars }} 字，此模型开了长链推理，会比较慢）</template><template v-else>AI 生成中</template> {{ elapsed }}s
                                 </span>
                             </span>
                             <el-button type="primary" size="small" @click="copyResult" :disabled="streaming">
@@ -373,6 +373,7 @@
                 const loading = ref(false);
                 const streaming = ref(false);
                 const elapsed = ref(0);
+                const thinkingChars = ref(0);   // >0 表示网关无视了 thinking:disabled，模型正在长链推理
                 let controller = null;   // 当前流式请求的 AbortController
                 let timer = null;        // 已耗时计时器
 
@@ -476,6 +477,8 @@
                     streaming.value = true;
                     result.value = '';
                     elapsed.value = 0;
+                    thinkingChars.value = 0;
+                    let aiStarted = false;   // AI 是否已开始输出正文（用于把基础结果换掉）
 
                     const startedAt = Date.now();
                     timer = setInterval(() => {
@@ -512,9 +515,19 @@
                                 const evt = parseSseChunk(chunk);
                                 if (!evt) continue;
                                 if (evt.event === 'delta') {
+                                    if (!aiStarted) {
+                                        // 第一个正文增量到达：清掉基础转换结果，换成 AI 的输出
+                                        aiStarted = true;
+                                        thinkingChars.value = 0;
+                                        result.value = '';
+                                    }
                                     result.value += evt.data.text || '';
                                 } else if (evt.event === 'base') {
-                                    // 基础转换已完成，先不覆盖显示，等 AI 的增量往上叠
+                                    // 基础规则转换已完成，立刻显示——这段是确定可用的结果，
+                                    // 不能让用户对着空白框等 AI（之前就是这样，看起来像卡死）
+                                    result.value = evt.data.convertedSql || '';
+                                } else if (evt.event === 'thinking') {
+                                    thinkingChars.value = evt.data.chars || 0;
                                 } else if (evt.event === 'done') {
                                     // 流式过程中显示的是模型原始输出，可能带 ```sql 围栏，
                                     // 这里用后端清理过的最终结果替换掉
@@ -594,6 +607,7 @@
                     sourceSql.value = '';
                     result.value = '';
                     elapsed.value = 0;
+                    thinkingChars.value = 0;
                 };
 
                 onMounted(loadAiStatus);
@@ -606,6 +620,7 @@
                     loading,
                     streaming,
                     elapsed,
+                    thinkingChars,
                     databases,
                     aiStatus,
                     aiAvailable,
