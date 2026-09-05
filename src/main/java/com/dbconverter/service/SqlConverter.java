@@ -39,6 +39,8 @@ public class SqlConverter {
         dialectConfigs.put("tidb", createTiDbConfig());
         dialectConfigs.put("gbase", createGBaseConfig());
         dialectConfigs.put("shentong", createShenTongConfig());
+        dialectConfigs.put("golden", createGoldenDbConfig());
+        dialectConfigs.put("mysql", createMysqlConfig());
     }
 
     public String convert(String sourceSql, String targetDb) {
@@ -138,9 +140,33 @@ public class SqlConverter {
             result = convertDateFormatPatterns(result);
         }
 
+        // 反方向同理：目标是 MySQL 系时 TO_CHAR -> DATE_FORMAT，格式串也必须一起翻回 '%Y-%m-%d'，
+        // 否则产出 DATE_FORMAT(d, 'YYYY-MM-DD')，与上面那个坑是同一个错、只是方向相反。
+        String toCharTarget = config.functions == null ? null : config.functions.get("TO_CHAR");
+        if ("DATE_FORMAT".equalsIgnoreCase(toCharTarget)) {
+            result = convertToCharPatterns(result);
+        }
+
+        // 裸关键字改函数调用：Oracle 系的 SYSDATE 不带括号，MySQL 的 NOW() 必须带，
+        // 通用映射那套 "函数名 + (" 的正则匹配不到它。
+        for (Map.Entry<String, String> entry : config.bareKeywords.entrySet()) {
+            Pattern barePattern = Pattern.compile(
+                "\\b" + Pattern.quote(entry.getKey()) + "\\b(?!\\s*\\()",
+                Pattern.CASE_INSENSITIVE
+            );
+            result = replaceOutsideLiterals(result, barePattern, entry.getValue());
+        }
+
         for (Map.Entry<String, String> entry : config.functions.entrySet()) {
             String sourceFunc = entry.getKey().toUpperCase();
             String targetFunc = entry.getValue();
+
+            // 恒等映射（如 MySQL 兼容库的 NOW -> NOW）没什么可改的，而且必须提前跳过：
+            // 下面"零参数调用"那支看到目标名不含括号就会去掉括号，把 NOW() 削成 NOW。
+            // 保留恒等项本身是有意义的——正向的 DATE_FORMAT 格式串翻译就靠它表达"此方言保留原样"。
+            if (sourceFunc.equalsIgnoreCase(targetFunc)) {
+                continue;
+            }
 
             // 处理带参数的函数
             if (targetFunc.contains("{0}")) {
@@ -289,6 +315,104 @@ public class SqlConverter {
         if (literalRun.length() == 0) return;
         out.append('"').append(literalRun).append('"');
         literalRun.setLength(0);
+    }
+
+    /** 一次 TO_CHAR 调用。 */
+    private static final Pattern TO_CHAR_CALL = Pattern.compile(
+            "\\bTO_CHAR\\s*\\(([^()]*)\\)",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    /**
+     * TO_CHAR 格式符 -> MySQL DATE_FORMAT 格式符，即 {@link #MYSQL_DATE_SPECIFIERS} 的逆表。
+     * <p>用 List 而不是 Map：必须按长度从长到短依次匹配，否则 {@code HH24} 会先被 {@code HH} 命中、
+     * {@code MONTH} 会先被 {@code MON} 命中。
+     */
+    private static final List<Map.Entry<String, String>> TO_CHAR_SPECIFIERS = List.of(
+            Map.entry("HH24", "%H"),
+            Map.entry("HH12", "%h"),
+            Map.entry("MONTH", "%M"),
+            Map.entry("YYYY", "%Y"),
+            Map.entry("DDD", "%j"),
+            Map.entry("MON", "%b"),
+            Map.entry("DAY", "%W"),
+            Map.entry("SS", "%s"),
+            Map.entry("MI", "%i"),
+            Map.entry("MM", "%m"),
+            Map.entry("DD", "%d"),
+            Map.entry("YY", "%y"),
+            Map.entry("HH", "%h"),     // 不带 12/24 后缀的 HH，Oracle 语义是 12 小时制
+            Map.entry("DY", "%a"),
+            Map.entry("AM", "%p"),
+            Map.entry("PM", "%p")
+    );
+
+    /**
+     * 把 SQL 里 TO_CHAR 调用的格式串翻成 DATE_FORMAT 的写法，函数名留给通用映射去改。
+     */
+    private String convertToCharPatterns(String sql) {
+        return replaceOutsideLiterals(sql, TO_CHAR_CALL, m -> {
+            String args = m.group(1);
+            Matcher literal = TRAILING_FORMAT_LITERAL.matcher(args);
+            // 单参的 TO_CHAR（纯粹的数字/日期转字符串）没有格式串，交给通用映射只改函数名
+            if (!literal.find()) return m.group();
+
+            String translated = translateToCharPattern(literal.group(1));
+            if (translated == null || translated.equals(literal.group(1))) return m.group();
+
+            int argsOffset = m.start(1) - m.start();
+            return m.group().substring(0, argsOffset + literal.start())
+                    + "'" + translated + "'"
+                    + m.group().substring(argsOffset + literal.end());
+        });
+    }
+
+    /**
+     * 翻译单个 TO_CHAR 格式串成 MySQL 写法。返回 {@code null} 表示放弃翻译（调用方保留原样）。
+     */
+    public static String translateToCharPattern(String pattern) {
+        StringBuilder out = new StringBuilder(pattern.length() + 8);
+        int i = 0;
+
+        while (i < pattern.length()) {
+            char c = pattern.charAt(i);
+
+            // 双引号括起来的是字面文本（TO_CHAR 里中文"年月日"必须这么写），去掉引号原样输出
+            if (c == '"') {
+                int end = pattern.indexOf('"', i + 1);
+                if (end < 0) return null;       // 引号不成对，格式串本身就是坏的，不碰
+                appendMysqlLiteral(out, pattern, i + 1, end);
+                i = end + 1;
+                continue;
+            }
+
+            String matched = null;
+            for (Map.Entry<String, String> spec : TO_CHAR_SPECIFIERS) {
+                if (pattern.regionMatches(true, i, spec.getKey(), 0, spec.getKey().length())) {
+                    matched = spec.getValue();
+                    i += spec.getKey().length();
+                    break;
+                }
+            }
+            if (matched != null) {
+                out.append(matched);
+                continue;
+            }
+
+            appendMysqlLiteral(out, pattern, i, i + 1);
+            i++;
+        }
+
+        return out.toString();
+    }
+
+    /** 输出一段字面文本，其中的 % 要转义成 %%，否则会被 MySQL 当成格式符。 */
+    private static void appendMysqlLiteral(StringBuilder out, String source, int from, int to) {
+        for (int i = from; i < to; i++) {
+            char c = source.charAt(i);
+            if (c == '%') out.append("%%");
+            else out.append(c);
+        }
     }
 
     private String convertTypes(String sql, DialectConfig config) {
@@ -900,7 +1024,7 @@ public class SqlConverter {
         String result = sql;
 
         // 处理 LIMIT 子句
-        result = applyLimitSyntax(result, config.syntax.get("limit"));
+        result = convertLimit(result, config);
 
         // 处理 AUTO_INCREMENT
         String autoIncSyntax = config.syntax.get("auto_increment");
@@ -924,8 +1048,49 @@ public class SqlConverter {
         String result = sql;
         result = convertFunctions(result, config);
         result = convertTypes(result, config);
-        result = applyLimitSyntax(result, config.syntax.get("limit"));
+        result = convertLimit(result, config);
         return result;
+    }
+
+    /** 匹配达梦/Oracle 系的 ROWNUM 限行，前面可能挂着 WHERE 或 AND。 */
+    private static final Pattern ROWNUM_PATTERN = Pattern.compile(
+            "\\s*\\b(?:WHERE|AND)\\s+ROWNUM\\s*<=?\\s*(\\d+)",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    /** 匹配 PG/金仓系的 FETCH FIRST n ROWS ONLY。 */
+    private static final Pattern FETCH_FIRST_PATTERN = Pattern.compile(
+            "\\bFETCH\\s+(?:FIRST|NEXT)\\s+(\\d+)\\s+ROWS?\\s+ONLY",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    /** 匹配达梦的自增列写法 IDENTITY(1,1)。 */
+    private static final Pattern IDENTITY_PATTERN = Pattern.compile(
+            "\\bIDENTITY\\s*\\(\\s*\\d+\\s*,\\s*\\d+\\s*\\)",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    /**
+     * 限行语法的转换。目标是 MySQL 系时先把国产库/Oracle 的写法收敛回 LIMIT，
+     * 再走通用的 LIMIT -> 目标写法（此时是恒等，等于原样保留）。
+     */
+    private String convertLimit(String sql, DialectConfig config) {
+        String result = sql;
+
+        if (config.reverseToMysql) {
+            // WHERE ROWNUM <= 10 -> LIMIT 10；连着前面的 WHERE/AND 一起吃掉，
+            // 否则会剩下一个空的 WHERE 或者 "status = 1 AND LIMIT 10" 这种非法语句。
+            result = replaceOutsideLiterals(result, ROWNUM_PATTERN, m -> {
+                boolean startsWithWhere = m.group().trim().regionMatches(true, 0, "WHERE", 0, 5);
+                // 原本是 AND ROWNUM 说明同层已有 WHERE 条件，LIMIT 要挪到句尾才合法，
+                // 这种情况交给人工，不做半对半错的改写
+                return startsWithWhere ? " LIMIT " + m.group(1) : m.group();
+            });
+            result = replaceOutsideLiterals(result, FETCH_FIRST_PATTERN, m -> "LIMIT " + m.group(1));
+            result = replaceOutsideLiterals(result, IDENTITY_PATTERN, "AUTO_INCREMENT");
+        }
+
+        return applyLimitSyntax(result, config.syntax.get("limit"));
     }
 
     /** 匹配 LIMIT n 或 LIMIT n OFFSET m */
@@ -1258,11 +1423,122 @@ public class SqlConverter {
         return dialectConfigs.keySet();
     }
 
+    /**
+     * GoldenDB（中兴金篆信通）是 MySQL 兼容的分布式数据库，函数、类型、LIMIT 都沿用 MySQL 写法，
+     * 因此这份配置与 TiDB / OceanBase 同形——保留原样即为正确。
+     */
+    private DialectConfig createGoldenDbConfig() {
+        DialectConfig config = new DialectConfig();
+        config.functions = Map.ofEntries(
+            Map.entry("NOW", "NOW"),
+            Map.entry("CONCAT", "CONCAT"),
+            Map.entry("IFNULL", "IFNULL"),
+            Map.entry("DATE_FORMAT", "DATE_FORMAT"),
+            Map.entry("SUBSTRING", "SUBSTRING"),
+            Map.entry("LENGTH", "LENGTH"),
+            Map.entry("TRIM", "TRIM"),
+            Map.entry("UPPER", "UPPER"),
+            Map.entry("LOWER", "LOWER"),
+            Map.entry("REPLACE", "REPLACE"),
+            Map.entry("ROUND", "ROUND"),
+            Map.entry("CEIL", "CEIL"),
+            Map.entry("FLOOR", "FLOOR")
+        );
+        config.types = Map.ofEntries(
+            Map.entry("TEXT", "TEXT"),
+            Map.entry("VARCHAR2", "VARCHAR"),   // 从 Oracle 系迁过来的 DDL 里会有
+            Map.entry("INT", "INT"),
+            Map.entry("BIGINT", "BIGINT"),
+            Map.entry("DECIMAL", "DECIMAL"),
+            Map.entry("DATETIME", "DATETIME"),
+            Map.entry("DATE", "DATE"),
+            Map.entry("TINYINT", "TINYINT"),
+            Map.entry("MEDIUMINT", "MEDIUMINT"),
+            Map.entry("LONGTEXT", "LONGTEXT"),
+            Map.entry("MEDIUMTEXT", "MEDIUMTEXT"),
+            Map.entry("DOUBLE", "DOUBLE"),
+            Map.entry("FLOAT", "FLOAT")
+        );
+        config.syntax = Map.of(
+            "limit", "LIMIT {n}",
+            "auto_increment", "AUTO_INCREMENT",
+            "comment", "-- {comment}"
+        );
+        return config;
+    }
+
+    /**
+     * 目标为 MySQL：这是唯一一个反方向的方言配置——把达梦/Oracle 系的写法收敛回 MySQL，
+     * 用于国产库回迁或者两边并行维护的场景。
+     * <p>映射键因此是 Oracle 系的函数名（NVL、TO_CHAR、SUBSTR），
+     * 同时保留 MySQL 自身写法的恒等项，这样源库本来就是 MySQL 时不会被改坏。
+     */
+    private DialectConfig createMysqlConfig() {
+        DialectConfig config = new DialectConfig();
+        config.functions = Map.ofEntries(
+            Map.entry("NVL", "IFNULL"),
+            Map.entry("TO_CHAR", "DATE_FORMAT"),   // 格式串由 convertToCharPatterns 一并翻译
+            Map.entry("SUBSTR", "SUBSTRING"),
+            Map.entry("NOW", "NOW"),
+            Map.entry("IFNULL", "IFNULL"),
+            Map.entry("DATE_FORMAT", "DATE_FORMAT"),
+            Map.entry("SUBSTRING", "SUBSTRING"),
+            Map.entry("CONCAT", "CONCAT"),
+            Map.entry("LENGTH", "LENGTH"),
+            Map.entry("TRIM", "TRIM"),
+            Map.entry("UPPER", "UPPER"),
+            Map.entry("LOWER", "LOWER"),
+            Map.entry("REPLACE", "REPLACE"),
+            Map.entry("ROUND", "ROUND"),
+            Map.entry("CEIL", "CEIL"),
+            Map.entry("FLOOR", "FLOOR")
+        );
+        // Oracle 系的 SYSDATE 不带括号，MySQL 必须写 NOW()
+        config.bareKeywords = Map.of("SYSDATE", "NOW()");
+        config.types = Map.ofEntries(
+            Map.entry("VARCHAR2", "VARCHAR"),
+            Map.entry("NVARCHAR2", "VARCHAR"),
+            Map.entry("CLOB", "LONGTEXT"),
+            Map.entry("NCLOB", "LONGTEXT"),
+            Map.entry("BLOB", "LONGBLOB"),
+            Map.entry("NUMBER", "DECIMAL"),
+            Map.entry("NUMERIC", "DECIMAL"),
+            Map.entry("INTEGER", "INT"),
+            Map.entry("TIMESTAMP", "DATETIME"),
+            Map.entry("DOUBLE PRECISION", "DOUBLE"),
+            Map.entry("REAL", "FLOAT"),
+            // MySQL 自身写法保持恒等，避免源库本来就是 MySQL 时被改坏
+            Map.entry("VARCHAR", "VARCHAR"),
+            Map.entry("TEXT", "TEXT"),
+            Map.entry("DATE", "DATE"),
+            Map.entry("DATETIME", "DATETIME"),
+            Map.entry("INT", "INT"),
+            Map.entry("BIGINT", "BIGINT"),
+            Map.entry("DECIMAL", "DECIMAL")
+        );
+        config.syntax = Map.of(
+            "limit", "LIMIT {n}",
+            "auto_increment", "AUTO_INCREMENT",
+            "comment", "-- {comment}"
+        );
+        config.reverseToMysql = true;
+        return config;
+    }
+
     @lombok.Data
     static class DialectConfig {
         Map<String, String> functions = new HashMap<>();
         Map<String, String> types = new HashMap<>();
         Map<String, String> syntax = new HashMap<>();
+
+        /** 裸关键字 -> 目标写法，如 Oracle 系不带括号的 SYSDATE -> MySQL 的 NOW()。 */
+        Map<String, String> bareKeywords = new HashMap<>();
+
+        /**
+         * 本方言是「回迁到 MySQL」方向：需要把 ROWNUM / FETCH FIRST / IDENTITY 这些
+         * 国产库写法收敛回 MySQL，而不是像其他方言那样从 MySQL 发散出去。
+         */
+        boolean reverseToMysql = false;
 
         /** 所有源类型名合成的单个正则，惰性构建后复用（原来每种类型各编译一次并各扫一趟）。 */
         private volatile Pattern typePattern;

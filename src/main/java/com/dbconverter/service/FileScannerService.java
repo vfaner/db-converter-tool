@@ -799,6 +799,22 @@ public class FileScannerService {
         if (containsFunction(source, "SUBSTRING") && !containsFunction(target, "SUBSTRING")) {
             types.add("函数转换(SUBSTRING)");
         }
+        // 回迁 MySQL 方向：源是国产库/Oracle 写法，目标是 MySQL
+        if (srcUpper.contains("ROWNUM") && tgtUpper.contains("LIMIT")) {
+            types.add("语法转换(ROWNUM→LIMIT)");
+        }
+        if (srcUpper.contains("FETCH FIRST") && tgtUpper.contains("LIMIT")) {
+            types.add("语法转换(FETCH→LIMIT)");
+        }
+        if (containsFunction(source, "NVL") && !containsFunction(target, "NVL")) {
+            types.add("函数转换(NVL)");
+        }
+        if (containsFunction(source, "TO_CHAR") && !containsFunction(target, "TO_CHAR")) {
+            types.add("函数转换(TO_CHAR)");
+        }
+        if (srcUpper.contains("SYSDATE") && !tgtUpper.contains("SYSDATE")) {
+            types.add("函数转换(SYSDATE)");
+        }
         if (types.isEmpty()) {
             types.add("SQL转换");
         }

@@ -187,6 +187,12 @@ Automatic mode shares the currently active model from "AI Config" with manual mo
 | TiDB | `tidb` | PingCAP TiDB |
 | GBase | `gbase` | GBase 8s |
 | ShenTong | `shentong` | ShenTong OSCAR |
+| GoldenDB | `golden` | ZTE GoldenDB, MySQL-compatible |
+| MySQL | `mysql` | **Reverse direction**: migrate domestic-DB / Oracle syntax back to MySQL |
+
+`mysql` is the only reverse-direction target, for migrating back from a domestic database or maintaining both in parallel: `NVL`→`IFNULL`, `SYSDATE`→`NOW()`, `TO_CHAR`→`DATE_FORMAT` (format string translated back to `%Y-%m-%d` as well), `VARCHAR2`→`VARCHAR`, `CLOB`→`LONGTEXT`, `NUMBER`→`DECIMAL`, `WHERE ROWNUM <= n`→`LIMIT n`, `FETCH FIRST n ROWS ONLY`→`LIMIT n`, `IDENTITY(1,1)`→`AUTO_INCREMENT`. Input that is already MySQL comes out byte-identical.
+
+Note that `WHERE ROWNUM <= n` is replaced along with its `WHERE`, but `AND ROWNUM <= n` (other conditions present at the same level) is **deliberately left alone**: `LIMIT` is only valid at the end of the statement, so an in-place swap would produce `status = 1 AND LIMIT 10`. That case is left for a human to decide.
 
 ## 📡 API Endpoints
 

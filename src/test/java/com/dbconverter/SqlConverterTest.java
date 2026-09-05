@@ -126,7 +126,7 @@ class SqlConverterTest {
         assertTrue(databases.contains("kingbase"));
         assertTrue(databases.contains("oceanbase"));
         assertTrue(databases.contains("tidb"));
-        assertEquals(7, databases.size());
+        assertEquals(9, databases.size());
     }
 
     @Test
@@ -765,5 +765,161 @@ class SqlConverterTest {
 
         assertTrue(result.contains("'YYYY-MM'"), result);
         assertTrue(result.contains("'HH24:MI'"), result);
+    }
+
+    // ---- GoldenDB（MySQL 兼容） ----
+
+    @Test
+    @DisplayName("GoldenDB 是 MySQL 兼容的，MySQL 写法原样保留")
+    void goldenDbKeepsMysqlSyntax() {
+        String sql = "SELECT IFNULL(a,0), DATE_FORMAT(t,'%Y-%m-%d') FROM x LIMIT 10";
+        assertEquals(sql, sqlConverter.convertPreservingText(sql, "golden"),
+                "MySQL 兼容库不该改写 MySQL 自己的写法");
+    }
+
+    @Test
+    @DisplayName("GoldenDB 仍然处理 Oracle 系遗留的 VARCHAR2")
+    void goldenDbStillNormalizesOracleTypes() {
+        assertTrue(sqlConverter.convertPreservingText(
+                "CREATE TABLE t (name VARCHAR2(50))", "golden").contains("name VARCHAR(50)"));
+    }
+
+    // ---- MySQL（反方向：国产库写法回迁） ----
+
+    @Test
+    @DisplayName("回迁 MySQL：NVL / SUBSTR 换回 MySQL 函数名")
+    void mysqlTargetConvertsOracleFunctions() {
+        String result = sqlConverter.convertPreservingText(
+                "SELECT NVL(name,'x'), SUBSTR(code,1,3) FROM t", "mysql");
+
+        assertTrue(result.contains("IFNULL(name,'x')"), result);
+        assertTrue(result.contains("SUBSTRING(code,1,3)"), result);
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：不带括号的 SYSDATE 要补成 NOW()")
+    void mysqlTargetConvertsBareSysdate() {
+        assertTrue(sqlConverter.convertPreservingText(
+                "SELECT * FROM t WHERE d < SYSDATE", "mysql").contains("d < NOW()"));
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：TO_CHAR 的格式串要翻回 % 写法")
+    void mysqlTargetTranslatesToCharPattern() {
+        String result = sqlConverter.convertPreservingText(
+                "SELECT TO_CHAR(t, 'YYYY-MM-DD HH24:MI:SS') FROM x", "mysql");
+
+        assertTrue(result.contains("DATE_FORMAT("), result);
+        assertTrue(result.contains("'%Y-%m-%d %H:%i:%s'"),
+                "格式串必须翻回 MySQL 写法，否则与正向那个 bug 是同一个错: " + result);
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：TO_CHAR 里双引号包的字面文本要脱掉引号")
+    void mysqlTargetUnwrapsQuotedLiteralText() {
+        assertEquals("%Y年%m月%d日",
+                SqlConverter.translateToCharPattern("YYYY\"年\"MM\"月\"DD\"日\""));
+        assertEquals("%Y-%m-%dT%H:%i:%s",
+                SqlConverter.translateToCharPattern("YYYY-MM-DD\"T\"HH24:MI:SS"));
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：格式符按长度优先匹配，HH24 不能先被 HH 命中")
+    void toCharSpecifiersMatchLongestFirst() {
+        assertEquals("%H:%i", SqlConverter.translateToCharPattern("HH24:MI"));
+        assertEquals("%h:%i", SqlConverter.translateToCharPattern("HH12:MI"));
+        assertEquals("%M", SqlConverter.translateToCharPattern("MONTH"));
+        assertEquals("%b", SqlConverter.translateToCharPattern("MON"));
+        assertEquals("%m", SqlConverter.translateToCharPattern("MM"));
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：字面文本里的 % 要转义成 %%")
+    void toCharLiteralPercentIsEscaped() {
+        assertEquals("%Y%%", SqlConverter.translateToCharPattern("YYYY\"%\""));
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：双引号不成对时放弃翻译")
+    void toCharPatternWithUnbalancedQuoteIsNotTranslated() {
+        assertNull(SqlConverter.translateToCharPattern("YYYY\"年"));
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：格式串与 DATE_FORMAT 往返一致")
+    void dateFormatRoundTripIsStable() {
+        String mysqlPattern = "%Y-%m-%d %H:%i:%s";
+        String toChar = SqlConverter.translateMysqlDatePattern(mysqlPattern);
+        assertEquals("YYYY-MM-DD HH24:MI:SS", toChar);
+        assertEquals(mysqlPattern, SqlConverter.translateToCharPattern(toChar),
+                "翻过去再翻回来必须还是原样");
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：WHERE ROWNUM <= n 换成 LIMIT n，不留空 WHERE")
+    void mysqlTargetConvertsRownumToLimit() {
+        String result = sqlConverter.convertPreservingText(
+                "SELECT * FROM t WHERE ROWNUM <= 10", "mysql");
+
+        assertTrue(result.contains("LIMIT 10"), result);
+        assertFalse(result.toUpperCase().contains("ROWNUM"), result);
+        assertFalse(result.toUpperCase().contains("WHERE"),
+                "WHERE 是为 ROWNUM 而存在的，一起去掉才合法: " + result);
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：AND ROWNUM 不做半对半错的改写")
+    void mysqlTargetLeavesAndRownumAlone() {
+        // LIMIT 必须挪到句尾才合法，就地替换会产出 "status = 1 AND LIMIT 10"
+        String sql = "SELECT * FROM t WHERE status = 1 AND ROWNUM <= 10";
+        assertTrue(sqlConverter.convertPreservingText(sql, "mysql").toUpperCase().contains("ROWNUM"),
+                "同层已有 WHERE 条件时不能就地换成 LIMIT，宁可不动");
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：FETCH FIRST n ROWS ONLY 换成 LIMIT n")
+    void mysqlTargetConvertsFetchFirstToLimit() {
+        assertTrue(sqlConverter.convertPreservingText(
+                "SELECT * FROM t FETCH FIRST 5 ROWS ONLY", "mysql").contains("LIMIT 5"));
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：类型换回 MySQL 写法")
+    void mysqlTargetConvertsTypes() {
+        String result = sqlConverter.convertPreservingText(
+                "CREATE TABLE t (a VARCHAR2(50), b CLOB, c NUMBER(10,2), d TIMESTAMP)", "mysql");
+
+        assertTrue(result.contains("a VARCHAR(50)"), result);
+        assertTrue(result.contains("b LONGTEXT"), result);
+        assertTrue(result.contains("c DECIMAL(10,2)"), result);
+        assertTrue(result.contains("d DATETIME"), result);
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：达梦的 IDENTITY(1,1) 换回 AUTO_INCREMENT")
+    void mysqlTargetConvertsIdentityToAutoIncrement() {
+        assertTrue(sqlConverter.convertPreservingText(
+                "CREATE TABLE t (id INT IDENTITY(1,1))", "mysql").contains("id INT AUTO_INCREMENT"));
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：源本来就是 MySQL 时不得被改坏")
+    void mysqlTargetIsIdempotentOnMysqlSource() {
+        String sql = "SELECT IFNULL(a,0), DATE_FORMAT(t,'%Y-%m-%d') FROM x WHERE d < NOW() LIMIT 10";
+        assertEquals(sql, sqlConverter.convertPreservingText(sql, "mysql"),
+                "MySQL 写法进 MySQL 出，必须原样");
+    }
+
+    @Test
+    @DisplayName("回迁 MySQL：字面量里的 ROWNUM 与 SYSDATE 不参与替换")
+    void mysqlTargetIgnoresLiterals() {
+        String sql = "SELECT 'WHERE ROWNUM <= 10' AS a, 'SYSDATE' AS b FROM t";
+        assertEquals(sql, sqlConverter.convertPreservingText(sql, "mysql"));
+    }
+
+    @Test
+    @DisplayName("新增的两个目标库出现在支持列表里")
+    void newDialectsAreSupported() {
+        assertTrue(sqlConverter.getSupportedDatabases().containsAll(java.util.List.of("golden", "mysql")));
     }
 }

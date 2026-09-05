@@ -189,6 +189,12 @@ mvn spring-boot:run
 | TiDB | `tidb` | PingCAP TiDB |
 | 南大通用 | `gbase` | GBase 8s |
 | 神州通用 | `shentong` | ShenTong OSCAR |
+| 中兴 GoldenDB | `golden` | GoldenDB，MySQL 兼容 |
+| MySQL | `mysql` | **反方向**：把国产库 / Oracle 写法回迁成 MySQL |
+
+`mysql` 是唯一一个反方向的目标库，用于国产库回迁或者两套库并行维护：`NVL`→`IFNULL`、`SYSDATE`→`NOW()`、`TO_CHAR`→`DATE_FORMAT`（格式串一并翻回 `%Y-%m-%d`）、`VARCHAR2`→`VARCHAR`、`CLOB`→`LONGTEXT`、`NUMBER`→`DECIMAL`、`WHERE ROWNUM <= n`→`LIMIT n`、`FETCH FIRST n ROWS ONLY`→`LIMIT n`、`IDENTITY(1,1)`→`AUTO_INCREMENT`。源本来就是 MySQL 时输出与输入完全一致，不会被改坏。
+
+其中 `WHERE ROWNUM <= n` 会连同 `WHERE` 一起换成 `LIMIT n`；但 `AND ROWNUM <= n`（同层已有其他条件）**故意不动** —— `LIMIT` 必须挪到句尾才合法，就地替换会产出 `status = 1 AND LIMIT 10` 这种半对半错的结果，这种情况留给人工判断。
 
 ## 📡 API 接口
 
