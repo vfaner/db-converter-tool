@@ -503,6 +503,10 @@
 
                 <el-form-item label="超时（秒）">
                     <el-input-number v-model="form.timeout" :min="5" :max="600" :step="10" style="width: 180px;"></el-input-number>
+                    <div style="color: #909399; font-size: 12px; line-height: 1.5; margin-top: 4px;">
+                        指「多久收不到新数据算断」以及「第一个字最多等多少秒」，不是整段生成的总时限。<br>
+                        服务端排队时首字延迟可能上百秒，遇到「N 秒内没有收到任何内容」就把这个值调大。
+                    </div>
                 </el-form-item>
 
                 <el-form-item label="备注">
@@ -566,7 +570,7 @@
                     visionModel: '',
                     maxTokens: 4096,
                     temperature: null,
-                    timeout: 120,
+                    timeout: 300,
                     remark: '',
                     active: false
                 });
@@ -698,7 +702,7 @@
                         visionModel: row.visionModel || '',
                         maxTokens: row.maxTokens || 4096,
                         temperature: row.temperature ?? null,
-                        timeout: row.timeout || 120,
+                        timeout: row.timeout || 300,
                         remark: row.remark || '',
                         active: row.active
                     });
@@ -813,7 +817,10 @@
                                 ElementPlus.ElMessageBox.alert(
                                     '请求地址：' + result.endpoint
                                     + '<br/>耗时：' + result.elapsedMs + ' ms'
-                                    + '<br/>模型回复：' + escapeHtml(result.reply),
+                                    + '<br/>模型回复：' + escapeHtml(result.reply)
+                                    + '<br/><br/><span style="color:#909399;font-size:12px;">'
+                                    + '注：测试只发一句极短的问候，耗时不代表真实转换的耗时。'
+                                    + '服务端排队时，真实请求的首字延迟可能上百秒。</span>',
                                     '✅ 连接成功',
                                     { dangerouslyUseHTMLString: true, confirmButtonText: '确定' }
                                 );

@@ -45,8 +45,13 @@ public class AiConfig {
     /** 采样温度，null 表示不传该参数（部分私有化服务不支持） */
     private Double temperature;
 
-    /** 请求超时时间（秒） */
-    private Integer timeout = 120;
+    /**
+     * 请求超时时间（秒）。
+     * 流式调用下的含义是"多久收不到新数据算断"以及"第一个字必须在多少秒内到"，
+     * 而不是"整段生成的总时限"。默认给 300 是因为网关排队时首字延迟实测能到 100~160 秒，
+     * 原来的 120 秒会把本来能成功的请求切掉。
+     */
+    private Integer timeout = 300;
 
     /** 是否为当前启用的配置 */
     private boolean active = false;

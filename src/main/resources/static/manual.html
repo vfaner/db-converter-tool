@@ -337,18 +337,24 @@
                         <el-button type="primary" size="large" @click="handleConvert" :loading="loading">
                             {{ enableOptimize ? 'AI优化转换' : '转换' }}
                         </el-button>
-                        <el-button size="large" @click="clearAll">清空</el-button>
+                        <el-button v-if="streaming" size="large" @click="abortStream">中断</el-button>
+                        <el-button v-else size="large" @click="clearAll">清空</el-button>
                     </div>
 
                     <!-- 转换结果 -->
-                    <div v-if="result" class="result-area">
+                    <div v-if="result || streaming" class="result-area">
                         <div class="result-header">
-                            <span class="result-title">转换结果</span>
-                            <el-button type="primary" size="small" @click="copyResult">
+                            <span class="result-title">
+                                转换结果
+                                <span v-if="streaming" style="font-weight: normal; color: #909399; font-size: 13px;">
+                                    · AI 生成中 {{ elapsed }}s
+                                </span>
+                            </span>
+                            <el-button type="primary" size="small" @click="copyResult" :disabled="streaming">
                                 📋 复制
                             </el-button>
                         </div>
-                        <div class="result-content">{{ result }}</div>
+                        <div class="result-content">{{ result }}<span v-if="streaming">▊</span></div>
                     </div>
                 </div>
             </main>
@@ -365,6 +371,10 @@
                 const enableOptimize = ref(false);
                 const result = ref('');
                 const loading = ref(false);
+                const streaming = ref(false);
+                const elapsed = ref(0);
+                let controller = null;   // 当前流式请求的 AbortController
+                let timer = null;        // 已耗时计时器
 
                 // AI 配置状态（来自「AI配置」页面的设置）
                 const aiStatus = ref(null);
@@ -432,14 +442,17 @@
                         ElementPlus.ElMessage.warning('请输入SQL语句');
                         return;
                     }
+                    if (enableOptimize.value) {
+                        await runOptimizeStream();
+                        return;
+                    }
 
                     loading.value = true;
                     try {
-                        const url = enableOptimize.value ? '/api/optimize' : '/api/convert';
-                        const response = await axios.post(url, {
+                        const response = await axios.post('/api/convert', {
                             sourceSql: sourceSql.value,
                             targetDb: targetDb.value
-                        });
+                        }, { timeout: 30000 });
 
                         if (response.data.code === 200) {
                             result.value = response.data.data.convertedSql;
@@ -451,6 +464,108 @@
                         ElementPlus.ElMessage.error('转换失败: ' + (error.response?.data?.message || error.message));
                     } finally {
                         loading.value = false;
+                    }
+                };
+
+                // AI 优化走 SSE 流式：响应头一两秒就到，之后边收边显示。
+                // 非流式的老接口 /api/optimize 仍然保留，但页面不再使用——
+                // 它在整段生成完成前拿不到任何字节，用户只能对着转圈干等，
+                // 而且一旦生成超过配置的超时时间，整次调用会被白白丢掉。
+                const runOptimizeStream = async () => {
+                    loading.value = true;
+                    streaming.value = true;
+                    result.value = '';
+                    elapsed.value = 0;
+
+                    const startedAt = Date.now();
+                    timer = setInterval(() => {
+                        elapsed.value = Math.floor((Date.now() - startedAt) / 1000);
+                    }, 1000);
+
+                    controller = new AbortController();
+                    let failure = null;
+
+                    try {
+                        const response = await fetch('/api/optimize/stream', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ sourceSql: sourceSql.value, targetDb: targetDb.value }),
+                            signal: controller.signal
+                        });
+                        if (!response.ok) {
+                            throw new Error('HTTP ' + response.status);
+                        }
+
+                        const reader = response.body.getReader();
+                        const decoder = new TextDecoder();
+                        let buffer = '';
+
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            buffer += decoder.decode(value, { stream: true });
+
+                            // SSE 以空行分隔事件；最后一段可能不完整，留在 buffer 里等下一批
+                            const chunks = buffer.split('\n\n');
+                            buffer = chunks.pop();
+                            for (const chunk of chunks) {
+                                const evt = parseSseChunk(chunk);
+                                if (!evt) continue;
+                                if (evt.event === 'delta') {
+                                    result.value += evt.data.text || '';
+                                } else if (evt.event === 'base') {
+                                    // 基础转换已完成，先不覆盖显示，等 AI 的增量往上叠
+                                } else if (evt.event === 'done') {
+                                    // 流式过程中显示的是模型原始输出，可能带 ```sql 围栏，
+                                    // 这里用后端清理过的最终结果替换掉
+                                    result.value = evt.data.convertedSql || result.value;
+                                } else if (evt.event === 'error') {
+                                    failure = evt.data.message || '未知错误';
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        if (error.name !== 'AbortError') {
+                            failure = error.message;
+                        }
+                    } finally {
+                        clearInterval(timer);
+                        timer = null;
+                        controller = null;
+                        streaming.value = false;
+                        loading.value = false;
+                    }
+
+                    if (failure) {
+                        ElementPlus.ElMessage.error('AI优化失败: ' + failure);
+                    } else if (result.value) {
+                        ElementPlus.ElMessage.success(`转换成功（耗时 ${elapsed.value}s）`);
+                    }
+                };
+
+                /** 把一段 SSE 文本拆成 { event, data }，data 已按 JSON 解析 */
+                const parseSseChunk = (chunk) => {
+                    let event = 'message';
+                    const dataLines = [];
+                    for (const line of chunk.split('\n')) {
+                        if (line.startsWith('event:')) {
+                            event = line.slice(6).trim();
+                        } else if (line.startsWith('data:')) {
+                            dataLines.push(line.slice(5).trim());
+                        }
+                    }
+                    if (!dataLines.length) return null;
+                    try {
+                        return { event, data: JSON.parse(dataLines.join('\n')) };
+                    } catch (e) {
+                        return null;
+                    }
+                };
+
+                const abortStream = () => {
+                    if (controller) {
+                        controller.abort();
+                        ElementPlus.ElMessage.info('已中断');
                     }
                 };
 
@@ -478,6 +593,7 @@
                 const clearAll = () => {
                     sourceSql.value = '';
                     result.value = '';
+                    elapsed.value = 0;
                 };
 
                 onMounted(loadAiStatus);
@@ -488,6 +604,8 @@
                     enableOptimize,
                     result,
                     loading,
+                    streaming,
+                    elapsed,
                     databases,
                     aiStatus,
                     aiAvailable,
@@ -496,6 +614,7 @@
                     handleOcrSuccess,
                     handleOcrError,
                     handleConvert,
+                    abortStream,
                     copyResult,
                     clearAll
                 };

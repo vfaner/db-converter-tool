@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
+import okio.BufferedSource;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -94,19 +95,7 @@ public class AiService {
      */
     public String optimizeSql(String sourceSql, String targetDb) {
         AiConfig config = requireActiveConfig();
-
-        String prompt = String.format("""
-                你是一个数据库SQL专家，精通各种数据库方言。请将以下SQL语句优化并转换为 %s 数据库的最佳兼容SQL。
-
-                要求：
-                1. 保持原有业务逻辑不变
-                2. 使用目标数据库的最佳实践和函数
-                3. 优化SQL性能
-                4. 只返回转换后的SQL代码，不要有其他说明文字
-
-                原始SQL：
-                %s
-                """, targetDb, sourceSql);
+        String prompt = buildOptimizePrompt(sourceSql, targetDb);
 
         try {
             String jsonBody = config.isAnthropicProtocol()
@@ -119,6 +108,77 @@ public class AiService {
             log.error("AI优化SQL失败", e);
             throw new RuntimeException("AI优化SQL失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * AI 优化 SQL —— 流式版本。
+     *
+     * <p>非流式调用有个协议层面的坑：服务端在整段生成完成之前<b>连响应头都不会发</b>，
+     * 于是 OkHttp 的 readTimeout 语义被偷换成了"整段生成不许超过 N 秒"，
+     * 前端也只能干等，既看不到进度，也分不清"模型慢"和"连接死了"——两者的报错一模一样，
+     * 都是卡在 {@code Http2Stream.takeHeaders} 上精确超时。
+     *
+     * <p>改成流式后：响应头一两秒就到，readTimeout 变成"多久没有新数据才算断"，
+     * 慢但活着的生成不会再被误杀，前端也能边收边显示。
+     *
+     * @param listener 每收到一段增量文本就回调一次；抛 IOException 可用于中断（例如前端已断开）
+     * @return 完整输出（已剥离 Markdown 代码围栏）
+     */
+    public String optimizeSqlStreaming(String sourceSql, String targetDb, StreamListener listener) {
+        AiConfig config = requireActiveConfig();
+        String prompt = buildOptimizePrompt(sourceSql, targetDb);
+
+        try {
+            String jsonBody = config.isAnthropicProtocol()
+                    ? buildAnthropicTextRequest(config, config.getModel(), prompt, true)
+                    : buildOpenAiTextRequest(config, config.getModel(), prompt, true);
+            return stripCodeFence(callApiStreaming(config, jsonBody, listener));
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("AI流式优化SQL失败", e);
+            throw new RuntimeException("AI优化SQL失败: " + describeFailure(e));
+        }
+    }
+
+    /**
+     * 增量文本回调
+     */
+    public interface StreamListener {
+        void onDelta(String text) throws IOException;
+    }
+
+    private String buildOptimizePrompt(String sourceSql, String targetDb) {
+        return String.format("""
+                你是一个数据库SQL专家，精通各种数据库方言。请将以下SQL语句优化并转换为 %s 数据库的最佳兼容SQL。
+
+                要求：
+                1. 保持原有业务逻辑不变
+                2. 使用目标数据库的最佳实践和函数
+                3. 优化SQL性能
+                4. 只返回转换后的SQL代码，不要有其他说明文字
+
+                原始SQL：
+                %s
+                """, targetDb, sourceSql);
+    }
+
+    /**
+     * 把底层异常翻成用户看得懂的话。裸 {@code timeout} 这种信息量为零的消息
+     * 正是这次排查绕远路的原因，不能再原样丢给前端。
+     */
+    private String describeFailure(Exception e) {
+        if (e instanceof java.net.SocketTimeoutException) {
+            return "等待模型响应超时。可在「AI 配置」里加大超时时间，或缩短 SQL 后重试";
+        }
+        if (e instanceof java.net.UnknownHostException) {
+            return "域名解析失败，请检查 API 地址与网络: " + e.getMessage();
+        }
+        if (e instanceof java.net.ConnectException) {
+            return "无法连接到 API 地址: " + e.getMessage();
+        }
+        String msg = e.getMessage();
+        return (msg == null || msg.isBlank()) ? e.getClass().getSimpleName() : msg;
     }
 
     /**
@@ -192,11 +252,19 @@ public class AiService {
      * OpenAI 兼容协议 - 纯文本请求
      */
     private String buildOpenAiTextRequest(AiConfig config, String model, String prompt) throws IOException {
+        return buildOpenAiTextRequest(config, model, prompt, false);
+    }
+
+    private String buildOpenAiTextRequest(AiConfig config, String model, String prompt, boolean stream)
+            throws IOException {
         ObjectNode requestBody = objectMapper.createObjectNode();
         requestBody.put("model", model);
         requestBody.put("max_tokens", config.getMaxTokens());
         if (config.getTemperature() != null) {
             requestBody.put("temperature", config.getTemperature());
+        }
+        if (stream) {
+            requestBody.put("stream", true);
         }
 
         ArrayNode messages = objectMapper.createArrayNode();
@@ -252,11 +320,19 @@ public class AiService {
      * Anthropic 原生协议 - 纯文本请求
      */
     private String buildAnthropicTextRequest(AiConfig config, String model, String prompt) throws IOException {
+        return buildAnthropicTextRequest(config, model, prompt, false);
+    }
+
+    private String buildAnthropicTextRequest(AiConfig config, String model, String prompt, boolean stream)
+            throws IOException {
         ObjectNode requestBody = objectMapper.createObjectNode();
         requestBody.put("model", model);
         requestBody.put("max_tokens", config.getMaxTokens());
         if (config.getTemperature() != null) {
             requestBody.put("temperature", config.getTemperature());
+        }
+        if (stream) {
+            requestBody.put("stream", true);
         }
 
         ArrayNode messages = objectMapper.createArrayNode();
@@ -316,24 +392,10 @@ public class AiService {
      * 发起 API 调用并解析响应
      */
     private String callApi(AiConfig config, String jsonBody) throws IOException {
-        RequestBody body = RequestBody.create(jsonBody, MediaType.parse("application/json"));
-
-        Request.Builder builder = new Request.Builder()
-                .url(buildEndpoint(config))
-                .addHeader("Content-Type", "application/json")
-                .post(body);
-
-        // 两种协议的认证头不同
-        if (config.isAnthropicProtocol()) {
-            builder.addHeader("x-api-key", config.getApiKey());
-            builder.addHeader("anthropic-version", ANTHROPIC_VERSION);
-        } else {
-            builder.addHeader("Authorization", "Bearer " + config.getApiKey());
-        }
-
+        Request request = buildRequest(config, jsonBody, false);
         OkHttpClient client = getHttpClient(config.getTimeout());
 
-        try (Response response = client.newCall(builder.build()).execute()) {
+        try (Response response = client.newCall(request).execute()) {
             String responseBody = response.body() != null ? response.body().string() : "";
 
             if (!response.isSuccessful()) {
@@ -345,6 +407,154 @@ public class AiService {
                     ? parseAnthropicResponse(responseBody)
                     : parseOpenAiResponse(responseBody);
         }
+    }
+
+    /**
+     * 发起流式调用，边收边回调，返回拼好的完整文本。
+     *
+     * <p>两种协议的 SSE 事件流不同，但都是「一行 {@code data:} 一个 JSON」的形状：
+     * OpenAI 以 {@code data: [DONE]} 收尾，Anthropic 则靠 JSON 里的 {@code type} 字段区分事件。
+     */
+    private String callApiStreaming(AiConfig config, String jsonBody, StreamListener listener) throws IOException {
+        Request request = buildRequest(config, jsonBody, true);
+        OkHttpClient client = getHttpClient(config.getTimeout());
+
+        try (Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                String errorBody = response.body() != null ? response.body().string() : "";
+                log.error("AI API 流式调用失败: {} - {}", response.code(), errorBody);
+                throw new IOException("AI API 调用失败 (HTTP " + response.code() + "): " + extractErrorMessage(errorBody));
+            }
+            if (response.body() == null) {
+                throw new IOException("AI 返回了空响应体");
+            }
+
+            BufferedSource source = response.body().source();
+            StringBuilder full = new StringBuilder();
+            String currentEvent = null;
+            String line;
+
+            // 首字延迟单独设闸门。readTimeout 只能判定"多久没有任何字节"，
+            // 而网关过载时会一边发心跳保活、一边迟迟不出内容——实测能这样吊住 7 分钟以上不断开，
+            // 光靠 readTimeout 永远等不到超时。所以另记一个"第一个字必须在 N 秒内到"的死线。
+            long deadlineNanos = TimeUnit.SECONDS.toNanos(resolveTimeout(config.getTimeout()));
+            long startNanos = System.nanoTime();
+
+            while ((line = source.readUtf8Line()) != null) {
+                if (full.length() == 0 && System.nanoTime() - startNanos > deadlineNanos) {
+                    throw new IOException(String.format(
+                            "已连上 AI 服务，但 %d 秒内没有收到任何内容（服务端通常是排队或过载）。"
+                                    + "可稍后重试，或在「AI 配置」里加大超时时间",
+                            resolveTimeout(config.getTimeout())));
+                }
+                if (line.isEmpty()) {
+                    currentEvent = null;   // 空行 = 一个 SSE 事件结束
+                    continue;
+                }
+                if (line.startsWith("event:")) {
+                    currentEvent = line.substring("event:".length()).trim();
+                    continue;
+                }
+                if (!line.startsWith("data:")) {
+                    continue;              // 注释行（": ping"）之类，忽略
+                }
+
+                String data = line.substring("data:".length()).trim();
+                if (data.isEmpty() || "[DONE]".equals(data)) {
+                    continue;
+                }
+                if ("error".equals(currentEvent)) {
+                    throw new IOException("AI 返回错误: " + extractErrorMessage(data));
+                }
+
+                String delta = config.isAnthropicProtocol()
+                        ? extractAnthropicDelta(data)
+                        : extractOpenAiDelta(data);
+                if (delta != null && !delta.isEmpty()) {
+                    full.append(delta);
+                    listener.onDelta(delta);
+                }
+            }
+
+            if (full.length() == 0) {
+                throw new IOException("AI 未返回任何内容（流已结束但没有文本增量）");
+            }
+            return full.toString();
+        }
+    }
+
+    /**
+     * 从 Anthropic SSE 的一条 data 里取增量文本。
+     * 只认 content_block_delta 的 text_delta；thinking / tool_use 等块一律跳过。
+     */
+    private String extractAnthropicDelta(String data) throws IOException {
+        JsonNode node = readSseJson(data);
+        if (node == null) {
+            return null;
+        }
+        String type = node.path("type").asText("");
+        if ("error".equals(type)) {
+            throw new IOException("AI 返回错误: " + extractErrorMessage(data));
+        }
+        if (!"content_block_delta".equals(type)) {
+            return null;
+        }
+        JsonNode delta = node.path("delta");
+        return delta.has("text") ? delta.get("text").asText() : null;
+    }
+
+    /**
+     * 从 OpenAI SSE 的一条 data 里取增量文本
+     */
+    private String extractOpenAiDelta(String data) throws IOException {
+        JsonNode node = readSseJson(data);
+        if (node == null) {
+            return null;
+        }
+        if (node.has("error")) {
+            throw new IOException("AI 返回错误: " + extractErrorMessage(data));
+        }
+        JsonNode choices = node.path("choices");
+        if (!choices.isArray() || choices.isEmpty()) {
+            return null;
+        }
+        JsonNode content = choices.get(0).path("delta").path("content");
+        return content.isTextual() ? content.asText() : null;
+    }
+
+    /**
+     * 单条 SSE data 解析。畸形 JSON 只跳过不中断整条流：
+     * 网关插入的心跳/自定义行不该让一次已经生成到一半的请求整体失败。
+     */
+    private JsonNode readSseJson(String data) {
+        try {
+            return objectMapper.readTree(data);
+        } catch (Exception e) {
+            log.debug("跳过无法解析的 SSE 数据行: {}", truncate(data));
+            return null;
+        }
+    }
+
+    private Request buildRequest(AiConfig config, String jsonBody, boolean streaming) {
+        RequestBody body = RequestBody.create(jsonBody, MediaType.parse("application/json"));
+
+        Request.Builder builder = new Request.Builder()
+                .url(buildEndpoint(config))
+                .post(body);
+
+        if (streaming) {
+            builder.addHeader("Accept", "text/event-stream");
+        }
+
+        // 两种协议的认证头不同
+        if (config.isAnthropicProtocol()) {
+            builder.addHeader("x-api-key", config.getApiKey());
+            builder.addHeader("anthropic-version", ANTHROPIC_VERSION);
+        } else {
+            builder.addHeader("Authorization", "Bearer " + config.getApiKey());
+        }
+
+        return builder.build();
     }
 
     /**
@@ -428,11 +638,20 @@ public class AiService {
     }
 
     private OkHttpClient getHttpClient(Integer timeoutSeconds) {
-        int timeout = (timeoutSeconds == null || timeoutSeconds <= 0) ? 120 : timeoutSeconds;
+        int timeout = resolveTimeout(timeoutSeconds);
         return clientCache.computeIfAbsent(timeout, t -> new OkHttpClient.Builder()
                 .connectTimeout(Math.min(t, 60), TimeUnit.SECONDS)
                 .readTimeout(t, TimeUnit.SECONDS)
                 .writeTimeout(Math.min(t, 60), TimeUnit.SECONDS)
+                // 连接池默认会把 HTTP/2 连接留 5 分钟复用。若这条连接被中间设备静默丢掉
+                // （空闲久了、网络切换、机器休眠），复用时请求就进了黑洞，一直等到 readTimeout 才报错，
+                // 报出来还是个信息量为零的 timeout。开 PING 让 OkHttp 自己发现连接已死并快速失败。
+                .pingInterval(30, TimeUnit.SECONDS)
                 .build());
+    }
+
+    /** 未配置或配错时回落到 120 秒 */
+    private static int resolveTimeout(Integer timeoutSeconds) {
+        return (timeoutSeconds == null || timeoutSeconds <= 0) ? 120 : timeoutSeconds;
     }
 }
