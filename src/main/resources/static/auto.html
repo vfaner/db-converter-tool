@@ -339,6 +339,37 @@
         .folder-up-item:hover {
             background: #f5f7fa;
         }
+        /* AI 优化开关 */
+        .ai-option-box {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 16px 18px;
+        }
+        .ai-option-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .ai-option-hint {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #909399;
+            line-height: 1.7;
+        }
+        .ai-option-box code {
+            background: #ecebf5;
+            padding: 1px 5px;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+        /* 改造结果弹窗：需要容纳文件路径与未命中明细，比默认宽度宽一些 */
+        .replace-result-box {
+            width: 620px;
+            max-width: 90vw;
+        }
+        .replace-result-box .el-message-box__message {
+            word-break: break-all;
+        }
     </style>
 </head>
 <body>
@@ -359,6 +390,10 @@
                         <span class="menu-icon">⚡</span>
                         <span>自动处理</span>
                     </a>
+                    <a href="/ai-config.html" class="menu-item">
+                        <span class="menu-icon">🤖</span>
+                        <span>AI配置</span>
+                    </a>
                     <a href="/support.html" class="menu-item">
                         <span class="menu-icon">❤️</span>
                         <span>支持与更新</span>
@@ -374,6 +409,24 @@
                 </div>
 
                 <div class="content-card">
+                    <!-- AI 状态提示 -->
+                    <div v-if="aiStatus" class="status-bar" style="margin-bottom: 20px; padding: 12px 16px; background: #f8f9fa; border-radius: 12px; font-size: 13px; color: #606266; line-height: 1.8;">
+                        <div>
+                            <template v-if="aiStatus.available">
+                                <el-tag type="success" size="small" effect="plain">AI 可用</el-tag>
+                                当前配置：<strong>{{ aiStatus.activeName }}</strong>
+                                <el-tag size="small" effect="plain" style="margin-left: 4px;">{{ aiStatus.activeModel }}</el-tag>
+                            </template>
+                            <template v-else>
+                                <el-tag type="danger" size="small" effect="plain">AI 未配置</el-tag>
+                                <span style="color: #999; margin-left: 4px;">AI 自动优化不可用，将仅使用规则转换</span>
+                            </template>
+                            <a href="/ai-config.html" style="color: #667eea; margin-left: 10px; text-decoration: none;">
+                                🤖 前往配置 →
+                            </a>
+                        </div>
+                    </div>
+
                     <!-- 扫描配置 -->
                     <div class="form-section">
                         <div class="form-section-title">扫描配置</div>
@@ -399,6 +452,39 @@
                         </div>
                     </div>
 
+                    <!-- AI 优化开关 -->
+                    <div class="form-section">
+                        <div class="form-section-title">AI 优化</div>
+                        <div class="ai-option-box">
+                            <div class="ai-option-row">
+                                <el-switch
+                                    v-model="enableAi"
+                                    :disabled="!aiAvailable"
+                                    active-text="启用 AI 自动优化"
+                                ></el-switch>
+                                <span v-if="!aiAvailable" style="color: #999; font-size: 12px;">
+                                    （需先配置 AI）
+                                </span>
+                            </div>
+                            <div class="ai-option-hint">
+                                在规则转换的基础上，再让 AI 针对目标数据库优化一轮。
+                                最多优化 <strong>200</strong> 条，超出部分仅用规则转换结果。
+                            </div>
+                            <el-alert
+                                v-if="enableAi"
+                                type="warning"
+                                :closable="false"
+                                show-icon
+                                style="margin-top: 10px;"
+                            >
+                                <template #title>
+                                    AI 生成的 SQL 会被写回源文件，请务必在「立即改造」前逐条核对目标 SQL。
+                                    改造前会自动生成 <code>.bak</code> 备份。
+                                </template>
+                            </el-alert>
+                        </div>
+                    </div>
+
                     <!-- 操作按钮 -->
                     <div class="button-group">
                         <el-button type="primary" size="large" @click="startScan" :loading="scanning">
@@ -414,7 +500,7 @@
                     <!-- 进度显示 -->
                     <div v-if="taskId" class="progress-section">
                         <div class="progress-header">
-                            <span class="progress-title">扫描进度</span>
+                            <span class="progress-title">{{ phaseTitle }}</span>
                             <span class="progress-status" :class="scanResult.status">
                                 {{ statusText }}
                             </span>
@@ -426,6 +512,17 @@
                         ></el-progress>
                         <div style="margin-top: 10px; font-size: 13px; color: #666;">
                             已发现 <strong>{{ scanResult.items ? scanResult.items.length : 0 }}</strong> 处需要改造
+                            <template v-if="scanResult.enableAi && scanResult.aiTotal > 0">
+                                ｜AI 优化 <strong>{{ scanResult.aiDone }}/{{ scanResult.aiTotal }}</strong>
+                                （已应用 {{ scanResult.aiApplied }}
+                                <template v-if="scanResult.aiFailed > 0">
+                                    ，未采纳 {{ scanResult.aiFailed }}
+                                </template>
+                                ）
+                            </template>
+                        </div>
+                        <div v-if="scanResult.aiMessage" style="margin-top: 6px; font-size: 12px; color: #e6a23c;">
+                            ⚠️ {{ scanResult.aiMessage }}
                         </div>
                     </div>
 
@@ -433,7 +530,12 @@
                     <div v-if="scanResult.items && scanResult.items.length > 0" class="table-section">
                         <div class="table-header">
                             <span class="table-title">改造清单</span>
-                            <span class="table-count">共 {{ scanResult.items.length }} 项</span>
+                            <span class="table-count">
+                                共 {{ scanResult.items.length }} 项
+                                <template v-if="aiOptimizedCount > 0">
+                                    ，其中 {{ aiOptimizedCount }} 项由 AI 优化
+                                </template>
+                            </span>
                         </div>
                         <el-table
                             :data="scanResult.items"
@@ -442,14 +544,14 @@
                             border
                             stripe
                         >
-                            <el-table-column prop="filePath" label="文件路径" width="280">
+                            <el-table-column prop="filePath" label="文件路径" width="240">
                                 <template #default="scope">
                                     <span class="sql-preview" :title="scope.row.filePath">
                                         {{ scope.row.filePath }}
                                     </span>
                                 </template>
                             </el-table-column>
-                            <el-table-column prop="sourceSql" label="源SQL片段" min-width="250">
+                            <el-table-column prop="sourceSql" label="源SQL片段" min-width="220">
                                 <template #default="scope">
                                     <el-popover
                                         placement="top"
@@ -465,20 +567,37 @@
                                     </el-popover>
                                 </template>
                             </el-table-column>
-                            <el-table-column prop="targetSql" label="目标SQL片段" min-width="250">
+                            <el-table-column prop="targetSql" label="目标SQL片段" min-width="220">
                                 <template #default="scope">
                                     <el-popover
                                         placement="top"
-                                        :width="400"
+                                        :width="460"
                                         trigger="hover"
                                     >
                                         <template #reference>
                                             <div class="sql-preview">{{ scope.row.targetSql }}</div>
                                         </template>
-                                        <div style="font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all;">
-                                            {{ scope.row.targetSql }}
+                                        <div>
+                                            <div v-if="scope.row.aiOptimized && scope.row.ruleSql" style="margin-bottom: 10px;">
+                                                <div style="font-size: 12px; color: #909399; margin-bottom: 4px;">规则转换结果：</div>
+                                                <div style="font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; color: #909399;">
+                                                    {{ scope.row.ruleSql }}
+                                                </div>
+                                                <div style="font-size: 12px; color: #667eea; margin: 8px 0 4px;">AI 优化后：</div>
+                                            </div>
+                                            <div style="font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all;">
+                                                {{ scope.row.targetSql }}
+                                            </div>
                                         </div>
                                     </el-popover>
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="来源" width="90" align="center">
+                                <template #default="scope">
+                                    <el-tag v-if="scope.row.aiOptimized" size="small" type="warning" effect="plain">
+                                        🤖 AI
+                                    </el-tag>
+                                    <el-tag v-else size="small" type="info" effect="plain">规则</el-tag>
                                 </template>
                             </el-table-column>
                             <el-table-column prop="conversionType" label="改造类型" width="150">
@@ -565,7 +684,7 @@
     </div>
 
     <script>
-        const { createApp, ref, computed, onUnmounted, watch } = Vue;
+        const { createApp, ref, computed, onMounted, onUnmounted, watch } = Vue;
 
         const app = createApp({
             setup() {
@@ -574,10 +693,19 @@
                 const taskId = ref('');
                 const scanning = ref(false);
                 const replacing = ref(false);
+                const enableAi = ref(false);
+                const aiStatus = ref(null);
                 const scanResult = ref({
                     progress: 0,
                     status: '',
-                    items: []
+                    items: [],
+                    enableAi: false,
+                    phase: '',
+                    aiTotal: 0,
+                    aiDone: 0,
+                    aiApplied: 0,
+                    aiFailed: 0,
+                    aiMessage: ''
                 });
 
                 // 文件夹选择器状态
@@ -601,7 +729,7 @@
 
                 const statusText = computed(() => {
                     switch (scanResult.value.status) {
-                        case 'running': return '扫描中...';
+                        case 'running': return '运行中...';
                         case 'completed': return '已完成';
                         case 'failed': return '失败';
                         default: return '等待中';
@@ -614,6 +742,30 @@
                     return '';
                 });
 
+                const phaseTitle = computed(() => {
+                    if (scanResult.value.phase === 'optimizing') return 'AI 优化进度';
+                    if (scanResult.value.phase === 'done') return '扫描进度';
+                    return '扫描进度';
+                });
+
+                const aiAvailable = computed(() => !!(aiStatus.value && aiStatus.value.available));
+
+                const aiOptimizedCount = computed(() => {
+                    if (!scanResult.value.items) return 0;
+                    return scanResult.value.items.filter(i => i.aiOptimized).length;
+                });
+
+                const loadAiStatus = async () => {
+                    try {
+                        const response = await axios.get('/api/ai-config/status');
+                        if (response.data.code === 200) {
+                            aiStatus.value = response.data.data || {};
+                        }
+                    } catch (error) {
+                        console.error('获取 AI 状态失败:', error);
+                    }
+                };
+
                 const startScan = async () => {
                     if (!projectPath.value.trim()) {
                         ElementPlus.ElMessage.warning('请输入项目目录路径');
@@ -622,12 +774,17 @@
 
                     scanning.value = true;
                     taskId.value = '';
-                    scanResult.value = { progress: 0, status: 'running', items: [] };
+                    scanResult.value = {
+                        progress: 0, status: 'running', items: [],
+                        enableAi: false, phase: '', aiTotal: 0,
+                        aiDone: 0, aiApplied: 0, aiFailed: 0, aiMessage: ''
+                    };
 
                     try {
                         const response = await axios.post('/api/scan', {
                             path: projectPath.value,
-                            targetDb: targetDb.value
+                            targetDb: targetDb.value,
+                            enableAi: enableAi.value
                         });
 
                         if (response.data.code === 200) {
@@ -669,6 +826,13 @@
                             scanResult.value.progress = data.progress;
                             scanResult.value.status = data.status;
                             scanResult.value.items = data.items || [];
+                            scanResult.value.enableAi = data.enableAi;
+                            scanResult.value.phase = data.phase;
+                            scanResult.value.aiTotal = data.aiTotal || 0;
+                            scanResult.value.aiDone = data.aiDone || 0;
+                            scanResult.value.aiApplied = data.aiApplied || 0;
+                            scanResult.value.aiFailed = data.aiFailed || 0;
+                            scanResult.value.aiMessage = data.aiMessage || '';
 
                             if (data.status === 'completed' || data.status === 'failed') {
                                 stopProgressPolling();
@@ -676,7 +840,14 @@
 
                                 if (data.status === 'completed') {
                                     const count = data.items ? data.items.length : 0;
-                                    ElementPlus.ElMessage.success(`扫描完成，发现 ${count} 处需要改造`);
+                                    let msg = `扫描完成，发现 ${count} 处需要改造`;
+                                    if (data.aiApplied > 0) {
+                                        msg += `，其中 ${data.aiApplied} 处由 AI 优化`;
+                                    }
+                                    if (data.aiFailed > 0) {
+                                        msg += `，${data.aiFailed} 处 AI 优化未采纳（已保留规则转换结果）`;
+                                    }
+                                    ElementPlus.ElMessage.success(msg);
                                 } else {
                                     ElementPlus.ElMessage.error('扫描失败');
                                 }
@@ -700,8 +871,14 @@
                     }
 
                     try {
+                        const aiCount = aiOptimizedCount.value;
+                        let confirmMsg = `确认要改造 ${itemCount} 处SQL吗？改造前会自动创建备份文件（.bak）。`;
+                        if (aiCount > 0) {
+                            confirmMsg += `\n\n其中 ${aiCount} 处为 AI 优化结果，AI 生成的 SQL 存在改变语义的风险，建议先逐条核对。`;
+                        }
+
                         await ElementPlus.ElMessageBox.confirm(
-                            `确认要改造 ${itemCount} 处SQL吗？改造前会自动创建备份文件。`,
+                            confirmMsg,
                             '确认改造',
                             {
                                 confirmButtonText: '确认改造',
@@ -717,12 +894,45 @@
 
                         if (response.data.code === 200) {
                             const result = response.data.data;
+                            // warnings/errors 含文件路径与 SQL 片段，弹窗启用了 HTML 渲染，必须转义
+                            const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
+                                '&': '&amp;', '<': '&lt;', '>': '&gt;',
+                                '"': '&quot;', "'": '&#39;'
+                            }[c]));
+
+                            let html = `处理文件: ${result.totalFiles} 个<br/>`
+                                + `已改动文件: ${result.successFiles} 个<br/>`
+                                + `总替换数: ${result.totalReplacements} 处`;
+                            if (result.skippedFiles > 0) {
+                                html += `<br/>未改动文件: ${result.skippedFiles} 个`;
+                            }
+
+                            if (result.unmatchedItems > 0) {
+                                html += `<br/><br/><b style="color:#e6a23c">⚠ ${result.unmatchedItems} 个条目未能在原文中定位，改造未生效</b>`
+                                    + `<div style="color:#909399;font-size:12px;margin-top:4px;line-height:1.5">`
+                                    + `常见原因：MyBatis XML 的 #{} 参数与动态标签、Java 的多行/拼接/转义字符串，`
+                                    + `在扫描阶段被归一化后与源文件原文不再逐字一致。这些位置需要手工改造。`
+                                    + `</div>`
+                                    + `<div style="max-height:180px;overflow:auto;margin-top:6px;font-size:12px;color:#606266">`
+                                    + (result.warnings || []).map((w) => `• ${esc(w)}`).join('<br/>')
+                                    + `</div>`;
+                            }
+
+                            if (result.hasErrors) {
+                                html += `<br/><b style="color:#f56c6c">✕ ${result.errors.length} 个文件处理失败</b>`
+                                    + `<div style="max-height:140px;overflow:auto;margin-top:6px;font-size:12px;color:#606266">`
+                                    + result.errors.map((e) => `• ${esc(e)}`).join('<br/>')
+                                    + `</div>`;
+                            }
+
+                            const imperfect = result.hasErrors || result.unmatchedItems > 0;
                             ElementPlus.ElMessageBox.alert(
-                                `改造完成！<br/>处理文件: ${result.totalFiles} 个<br/>成功文件: ${result.successFiles} 个<br/>总替换数: ${result.totalReplacements} 处`,
-                                '改造结果',
+                                html,
+                                imperfect ? '改造完成（存在未生效项）' : '改造完成',
                                 {
                                     dangerouslyUseHTMLString: true,
-                                    confirmButtonText: '确定'
+                                    confirmButtonText: '确定',
+                                    customClass: 'replace-result-box'
                                 }
                             );
                         } else {
@@ -817,6 +1027,10 @@
                     folderPickerVisible.value = false;
                 };
 
+                onMounted(() => {
+                    loadAiStatus();
+                });
+
                 onUnmounted(() => {
                     stopProgressPolling();
                 });
@@ -833,6 +1047,12 @@
                     progressStatus,
                     startScan,
                     startReplace,
+                    // AI 优化
+                    enableAi,
+                    aiStatus,
+                    aiAvailable,
+                    aiOptimizedCount,
+                    phaseTitle,
                     // 文件夹选择器
                     folderPickerVisible,
                     folderLoading,

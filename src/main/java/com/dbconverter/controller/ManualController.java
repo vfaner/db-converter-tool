@@ -1,7 +1,7 @@
 package com.dbconverter.controller;
 
 import com.dbconverter.common.Result;
-import com.dbconverter.service.AnthropicApiService;
+import com.dbconverter.service.AiService;
 import com.dbconverter.service.SqlConverter;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -17,12 +17,12 @@ import java.io.IOException;
 public class ManualController {
 
     private final SqlConverter sqlConverter;
-    private final AnthropicApiService anthropicApiService;
+    private final AiService aiService;
 
     @Autowired
-    public ManualController(SqlConverter sqlConverter, AnthropicApiService anthropicApiService) {
+    public ManualController(SqlConverter sqlConverter, AiService aiService) {
         this.sqlConverter = sqlConverter;
-        this.anthropicApiService = anthropicApiService;
+        this.aiService = aiService;
     }
 
     /**
@@ -34,15 +34,14 @@ public class ManualController {
             return Result.error(400, "上传文件不能为空");
         }
 
-        String contentType = file.getContentType();
-        if (contentType == null || !contentType.startsWith("image/")) {
-            return Result.error(400, "只支持图片文件（.png/.jpg/.jpeg/.bmp）");
-        }
-
         try {
             byte[] imageData = file.getBytes();
-            String mimeType = contentType;
-            String sql = anthropicApiService.recognizeImage(imageData, mimeType);
+            // 不信任客户端声明的 Content-Type，按实际字节头判定真实图片类型
+            String mimeType = detectImageMimeType(imageData);
+            if (mimeType == null) {
+                return Result.error(400, "只支持图片文件（.png/.jpg/.jpeg/.bmp/.gif/.webp）");
+            }
+            String sql = aiService.recognizeImage(imageData, mimeType);
             return Result.success(sql);
         } catch (IOException e) {
             log.error("读取上传文件失败", e);
@@ -51,6 +50,48 @@ public class ManualController {
             log.error("OCR识别失败", e);
             return Result.error("OCR识别失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 根据文件头魔数识别图片类型，无法识别时返回 null
+     */
+    static String detectImageMimeType(byte[] data) {
+        if (data == null || data.length < 12) {
+            return null;
+        }
+        // PNG: 89 50 4E 47 0D 0A 1A 0A
+        if (matches(data, 0, 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)) {
+            return "image/png";
+        }
+        // JPEG: FF D8 FF
+        if (matches(data, 0, 0xFF, 0xD8, 0xFF)) {
+            return "image/jpeg";
+        }
+        // BMP: 42 4D
+        if (matches(data, 0, 0x42, 0x4D)) {
+            return "image/bmp";
+        }
+        // GIF: "GIF8"
+        if (matches(data, 0, 0x47, 0x49, 0x46, 0x38)) {
+            return "image/gif";
+        }
+        // WEBP: "RIFF" .... "WEBP"
+        if (matches(data, 0, 0x52, 0x49, 0x46, 0x46) && matches(data, 8, 0x57, 0x45, 0x42, 0x50)) {
+            return "image/webp";
+        }
+        return null;
+    }
+
+    private static boolean matches(byte[] data, int offset, int... signature) {
+        if (data.length < offset + signature.length) {
+            return false;
+        }
+        for (int i = 0; i < signature.length; i++) {
+            if ((data[offset + i] & 0xFF) != signature[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -95,7 +136,7 @@ public class ManualController {
             String convertedSql = sqlConverter.convert(request.getSourceSql(), request.getTargetDb());
 
             // 再进行AI优化
-            String optimizedSql = anthropicApiService.optimizeSql(convertedSql, request.getTargetDb());
+            String optimizedSql = aiService.optimizeSql(convertedSql, request.getTargetDb());
 
             ConvertResponse response = new ConvertResponse();
             response.setConvertedSql(optimizedSql);

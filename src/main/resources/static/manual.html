@@ -238,6 +238,10 @@
                         <span class="menu-icon">⚡</span>
                         <span>自动处理</span>
                     </a>
+                    <a href="/ai-config.html" class="menu-item">
+                        <span class="menu-icon">🤖</span>
+                        <span>AI配置</span>
+                    </a>
                     <a href="/support.html" class="menu-item">
                         <span class="menu-icon">❤️</span>
                         <span>支持与更新</span>
@@ -253,6 +257,24 @@
                 </div>
 
                 <div class="content-card">
+                    <!-- AI 状态提示 -->
+                    <div v-if="aiStatus" class="status-bar" style="margin-bottom: 20px; padding: 12px 16px; background: #f8f9fa; border-radius: 12px; font-size: 13px; color: #606266; line-height: 1.8;">
+                        <div>
+                            <template v-if="aiStatus.available">
+                                <el-tag type="success" size="small" effect="plain">AI 可用</el-tag>
+                                当前配置：<strong>{{ aiStatus.activeName }}</strong>
+                                <el-tag size="small" effect="plain" style="margin-left: 4px;">{{ aiStatus.activeModel }}</el-tag>
+                            </template>
+                            <template v-else>
+                                <el-tag type="danger" size="small" effect="plain">AI 未配置</el-tag>
+                                <span style="color: #999; margin-left: 4px;">OCR 识别和 AI 深度优化不可用</span>
+                            </template>
+                            <a href="/ai-config.html" style="color: #667eea; margin-left: 10px; text-decoration: none;">
+                                🤖 前往配置 →
+                            </a>
+                        </div>
+                    </div>
+
                     <!-- 图片上传 -->
                     <div class="form-section">
                         <div class="form-section-title">上传图片识别SQL</div>
@@ -263,11 +285,12 @@
                             :on-success="handleOcrSuccess"
                             :on-error="handleOcrError"
                             :before-upload="beforeUpload"
+                            :disabled="!aiVisionAvailable"
                             accept=".png,.jpg,.jpeg,.bmp"
                         >
-                            <div class="upload-area">
+                            <div class="upload-area" :style="{ cursor: aiVisionAvailable ? 'pointer' : 'not-allowed' }">
                                 <div class="upload-icon">📷</div>
-                                <div>点击或拖拽上传图片</div>
+                                <div>{{ aiVisionAvailable ? '点击或拖拽上传图片' : 'AI 未配置，图片识别不可用' }}</div>
                                 <div style="font-size: 12px; color: #999; margin-top: 5px;">支持 PNG/JPG/JPEG/BMP 格式</div>
                             </div>
                         </el-upload>
@@ -300,8 +323,11 @@
                         <div>
                             <div class="form-section-title">AI优化</div>
                             <div class="switch-wrapper">
-                                <el-switch v-model="enableOptimize"></el-switch>
-                                <span class="switch-label">启用AI深度优化</span>
+                                <el-switch v-model="enableOptimize" :disabled="!aiAvailable"></el-switch>
+                                <span class="switch-label">
+                                    启用AI深度优化
+                                    <span v-if="!aiAvailable" style="color: #f56c6c;">（需先配置 AI）</span>
+                                </span>
                             </div>
                         </div>
                     </div>
@@ -330,7 +356,7 @@
     </div>
 
     <script>
-        const { createApp, ref, onMounted } = Vue;
+        const { createApp, ref, computed, onMounted } = Vue;
 
         const app = createApp({
             setup() {
@@ -339,6 +365,22 @@
                 const enableOptimize = ref(false);
                 const result = ref('');
                 const loading = ref(false);
+
+                // AI 配置状态（来自「AI配置」页面的设置）
+                const aiStatus = ref(null);
+                const aiAvailable = computed(() => !!(aiStatus.value && aiStatus.value.available));
+                const aiVisionAvailable = computed(() => !!(aiStatus.value && aiStatus.value.visionAvailable));
+
+                const loadAiStatus = async () => {
+                    try {
+                        const response = await axios.get('/api/ai-config/status');
+                        if (response.data.code === 200) {
+                            aiStatus.value = response.data.data || {};
+                        }
+                    } catch (error) {
+                        console.error('获取 AI 状态失败:', error);
+                    }
+                };
 
                 const databases = ref([
                     { value: 'gaussdb', label: '高斯数据库 (GaussDB)' },
@@ -351,6 +393,11 @@
                 ]);
 
                 const beforeUpload = (file) => {
+                    if (!aiVisionAvailable.value) {
+                        ElementPlus.ElMessage.warning('请先在「AI配置」中配置带视觉模型的 AI 服务');
+                        return false;
+                    }
+
                     const isImage = ['image/png', 'image/jpg', 'image/jpeg', 'image/bmp'].includes(file.type);
                     const isLt10M = file.size / 1024 / 1024 < 10;
 
@@ -431,6 +478,8 @@
                     result.value = '';
                 };
 
+                onMounted(loadAiStatus);
+
                 return {
                     sourceSql,
                     targetDb,
@@ -438,6 +487,9 @@
                     result,
                     loading,
                     databases,
+                    aiStatus,
+                    aiAvailable,
+                    aiVisionAvailable,
                     beforeUpload,
                     handleOcrSuccess,
                     handleOcrError,

@@ -44,10 +44,12 @@ public class AutoController {
         }
 
         try {
-            String taskId = scannerService.startScan(request.getPath(), request.getTargetDb());
+            String taskId = scannerService.startScan(
+                    request.getPath(), request.getTargetDb(), request.isEnableAi());
             ScanResponse response = new ScanResponse();
             response.setTaskId(taskId);
-            response.setMessage("扫描任务已启动");
+            response.setMessage(request.isEnableAi()
+                    ? "扫描任务已启动（含 AI 优化）" : "扫描任务已启动");
             return Result.success(response);
         } catch (Exception e) {
             log.error("启动扫描任务失败", e);
@@ -76,6 +78,14 @@ public class AutoController {
         response.setItems(task.getItems());
         response.setPath(task.getPath());
         response.setTargetDb(task.getTargetDb());
+        response.setEnableAi(task.isEnableAi());
+        response.setPhase(task.getPhase());
+        response.setAiTotal(task.getAiTotal());
+        response.setAiDone(task.getAiDone());
+        response.setAiApplied(task.getAiApplied());
+        response.setAiFailed(task.getAiFailed());
+        response.setAiSkipped(task.getAiSkipped());
+        response.setAiMessage(task.getAiMessage());
 
         return Result.success(response);
     }
@@ -91,15 +101,7 @@ public class AutoController {
 
         try {
             FileReplacerService.ReplaceResult result = replacerService.replaceByTaskId(request.getTaskId());
-
-            ReplaceResponse response = new ReplaceResponse();
-            response.setTotalFiles(result.getTotalFiles());
-            response.setSuccessFiles(result.getSuccessFiles());
-            response.setTotalReplacements(result.getTotalReplacements());
-            response.setErrors(result.getErrors());
-            response.setHasErrors(result.hasErrors());
-
-            return Result.success(response);
+            return Result.success(toReplaceResponse(result));
         } catch (IllegalArgumentException e) {
             return Result.error(404, e.getMessage());
         } catch (IllegalStateException e) {
@@ -121,19 +123,25 @@ public class AutoController {
 
         try {
             FileReplacerService.ReplaceResult result = replacerService.replaceItems(items);
-
-            ReplaceResponse response = new ReplaceResponse();
-            response.setTotalFiles(result.getTotalFiles());
-            response.setSuccessFiles(result.getSuccessFiles());
-            response.setTotalReplacements(result.getTotalReplacements());
-            response.setErrors(result.getErrors());
-            response.setHasErrors(result.hasErrors());
-
-            return Result.success(response);
+            return Result.success(toReplaceResponse(result));
         } catch (Exception e) {
             log.error("执行替换失败", e);
             return Result.error("执行替换失败: " + e.getMessage());
         }
+    }
+
+    private ReplaceResponse toReplaceResponse(FileReplacerService.ReplaceResult result) {
+        ReplaceResponse response = new ReplaceResponse();
+        response.setTotalFiles(result.getTotalFiles());
+        response.setSuccessFiles(result.getSuccessFiles());
+        response.setSkippedFiles(result.getSkippedFiles());
+        response.setTotalReplacements(result.getTotalReplacements());
+        response.setUnmatchedItems(result.getUnmatchedItems());
+        response.setErrors(result.getErrors());
+        response.setWarnings(result.getWarnings());
+        response.setHasErrors(result.hasErrors());
+        response.setHasWarnings(result.hasWarnings());
+        return response;
     }
 
     /**
@@ -199,6 +207,8 @@ public class AutoController {
     public static class ScanRequest {
         private String path;
         private String targetDb;
+        /** 是否在规则转换之后再用 AI 优化一轮 */
+        private boolean enableAi;
     }
 
     @Data
@@ -215,6 +225,15 @@ public class AutoController {
         private List<ConversionItem> items;
         private String path;
         private String targetDb;
+        // AI 优化阶段信息
+        private boolean enableAi;
+        private String phase;
+        private int aiTotal;
+        private int aiDone;
+        private int aiApplied;
+        private int aiFailed;
+        private int aiSkipped;
+        private String aiMessage;
     }
 
     @Data
@@ -226,8 +245,15 @@ public class AutoController {
     public static class ReplaceResponse {
         private int totalFiles;
         private int successFiles;
+        /** 一处都没命中、因而未做任何改动的文件数 */
+        private int skippedFiles;
         private int totalReplacements;
+        /** 未能在原文中定位的条目数（改造实际未生效） */
+        private int unmatchedItems;
         private List<String> errors;
+        /** 未命中条目的明细提示 */
+        private List<String> warnings;
         private boolean hasErrors;
+        private boolean hasWarnings;
     }
 }

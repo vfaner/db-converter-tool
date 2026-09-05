@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23667eea'/%3E%3Cstop offset='1' stop-color='%23764ba2'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cellipse cx='32' cy='16' rx='22' ry='9' fill='url(%23g)'/%3E%3Crect x='10' y='16' width='44' height='32' fill='url(%23g)'/%3E%3Cellipse cx='32' cy='48' rx='22' ry='9' fill='%23764ba2'/%3E%3Cellipse cx='32' cy='16' rx='22' ry='9' fill='%23667eea' opacity='0.9'/%3E%3Cellipse cx='32' cy='32' rx='22' ry='9' fill='none' stroke='%23fff' stroke-opacity='0.3' stroke-width='1.2'/%3E%3C/svg%3E">
+    <title>数据库信创改造工具 - AI配置</title>
+    <link rel="stylesheet" href="/libs/element-plus.index.css">
+    <script src="/libs/vue.global.js"></script>
+    <script src="/libs/element-plus.index.full.js"></script>
+    <script src="/libs/axios.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            overflow: hidden;
+        }
+        .app-container {
+            display: flex;
+            height: 100vh;
+        }
+        .sidebar {
+            width: 220px;
+            flex-shrink: 0;
+            height: 100vh;
+            background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+            box-shadow: 2px 0 10px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+        }
+        .sidebar-header {
+            padding: 25px 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .sidebar-header h1 {
+            color: #fff;
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+        .sidebar-header p {
+            color: rgba(255,255,255,0.6);
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        .menu {
+            padding: 20px 0;
+            flex: 1;
+        }
+        .menu-item {
+            display: flex;
+            align-items: center;
+            padding: 15px 25px;
+            color: rgba(255,255,255,0.7);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border-left: 3px solid transparent;
+        }
+        .menu-item:hover {
+            background: rgba(255,255,255,0.05);
+            color: #fff;
+        }
+        .menu-item.active {
+            background: rgba(102, 126, 234, 0.2);
+            color: #fff;
+            border-left-color: #667eea;
+        }
+        .menu-icon {
+            width: 20px;
+            height: 20px;
+            margin-right: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .main-content {
+            flex: 1;
+            padding: 30px;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        /* 彩色滚动条 */
+        .main-content {
+            scrollbar-width: thin;
+            scrollbar-color: #764ba2 transparent;
+        }
+        .main-content::-webkit-scrollbar {
+            width: 8px;
+        }
+        .main-content::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .main-content::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+            border-radius: 999px;
+        }
+        .main-content::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, #5568d3 0%, #63398c 100%);
+        }
+        .page-header {
+            margin-bottom: 25px;
+        }
+        .page-header h2 {
+            color: #fff;
+            font-size: 28px;
+            font-weight: 600;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .page-header p {
+            color: rgba(255,255,255,0.8);
+            margin-top: 8px;
+            font-size: 14px;
+        }
+        .content-card {
+            background: #fff;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        .form-section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+        }
+        .form-section-title::before {
+            content: '';
+            width: 4px;
+            height: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 2px;
+            margin-right: 10px;
+        }
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .status-bar {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 16px 20px;
+            margin-bottom: 22px;
+            font-size: 13px;
+            color: #606266;
+            line-height: 1.9;
+        }
+        .status-bar .status-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .status-bar code {
+            background: #eef0f5;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            word-break: break-all;
+        }
+        .el-button {
+            border-radius: 8px !important;
+        }
+        .el-button--primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            border: none !important;
+        }
+        .el-button--primary:hover {
+            opacity: 0.9;
+        }
+        .el-input__wrapper, .el-textarea__inner {
+            border-radius: 8px !important;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 50px 20px;
+            color: #999;
+        }
+        .empty-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        .model-cell {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            color: #303133;
+        }
+        .url-cell {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            color: #606266;
+            word-break: break-all;
+        }
+        .muted {
+            color: #c0c4cc;
+        }
+        .form-tip {
+            font-size: 12px;
+            color: #909399;
+            line-height: 1.6;
+            margin-top: 4px;
+        }
+        .preset-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+        .test-result {
+            margin-top: 4px;
+            border-radius: 8px;
+            padding: 12px 14px;
+            font-size: 13px;
+            line-height: 1.7;
+            word-break: break-all;
+        }
+        .test-result.ok {
+            background: #f0f9eb;
+            color: #529b2e;
+            border: 1px solid #e1f3d8;
+        }
+        .test-result.fail {
+            background: #fef0f0;
+            color: #c45656;
+            border: 1px solid #fde2e2;
+        }
+        .endpoint-preview {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            color: #409eff;
+            background: #ecf5ff;
+            border-radius: 6px;
+            padding: 8px 10px;
+            margin-top: 6px;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="app-container">
+            <!-- 左侧菜单 -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <h1>数据库改造工具</h1>
+                    <p>SQL智能转换平台</p>
+                </div>
+                <nav class="menu">
+                    <a href="/manual.html" class="menu-item">
+                        <span class="menu-icon">✏️</span>
+                        <span>手工处理</span>
+                    </a>
+                    <a href="/auto.html" class="menu-item">
+                        <span class="menu-icon">⚡</span>
+                        <span>自动处理</span>
+                    </a>
+                    <a href="/ai-config.html" class="menu-item active">
+                        <span class="menu-icon">🤖</span>
+                        <span>AI配置</span>
+                    </a>
+                    <a href="/support.html" class="menu-item">
+                        <span class="menu-icon">❤️</span>
+                        <span>支持与更新</span>
+                    </a>
+                </nav>
+            </aside>
+
+            <!-- 主内容区 -->
+            <main class="main-content">
+                <div class="page-header">
+                    <h2>AI配置</h2>
+                    <p>管理多个 AI 模型厂商，支持 OpenAI 兼容协议与 Anthropic 原生协议，可对接内网私有化部署的模型服务</p>
+                </div>
+
+                <div class="content-card">
+                    <!-- 当前状态 -->
+                    <div class="status-bar">
+                        <div class="status-row">
+                            <strong>当前状态：</strong>
+                            <el-tag v-if="status.available" type="success" size="small">AI 功能可用</el-tag>
+                            <el-tag v-else type="danger" size="small">AI 功能不可用</el-tag>
+
+                            <template v-if="status.activeName">
+                                <span>启用配置：<strong>{{ status.activeName }}</strong></span>
+                                <el-tag size="small" effect="plain">{{ status.activeProtocol }}</el-tag>
+                                <span>文本模型：<code>{{ status.activeModel || '-' }}</code></span>
+                                <span>
+                                    图片识别：
+                                    <el-tag v-if="status.visionAvailable" type="success" size="small" effect="plain">
+                                        {{ status.activeVisionModel }}
+                                    </el-tag>
+                                    <el-tag v-else type="info" size="small" effect="plain">未配置</el-tag>
+                                </span>
+                            </template>
+                        </div>
+                        <div class="status-row" style="margin-top: 4px;">
+                            <span>配置文件：<code>{{ status.configFile || '-' }}</code></span>
+                        </div>
+                    </div>
+
+                    <!-- 工具栏 -->
+                    <div class="toolbar">
+                        <div class="form-section-title" style="margin-bottom: 0;">
+                            厂商配置列表（共 {{ configs.length }} 个）
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <el-button @click="loadAll" :loading="loading">🔄 刷新</el-button>
+                            <el-button type="primary" @click="openCreateDialog">➕ 新增配置</el-button>
+                        </div>
+                    </div>
+
+                    <!-- 配置表格 -->
+                    <el-table
+                        v-if="configs.length > 0"
+                        :data="configs"
+                        style="width: 100%"
+                        border
+                        stripe
+                        v-loading="loading"
+                    >
+                        <el-table-column label="启用" width="80" align="center">
+                            <template #default="scope">
+                                <el-tag v-if="scope.row.active" type="success" size="small">启用中</el-tag>
+                                <el-button
+                                    v-else
+                                    size="small"
+                                    text
+                                    type="primary"
+                                    @click="activate(scope.row)"
+                                >启用</el-button>
+                            </template>
+                        </el-table-column>
+
+                        <el-table-column prop="name" label="厂商名称" min-width="130">
+                            <template #default="scope">
+                                <strong>{{ scope.row.name }}</strong>
+                                <div v-if="scope.row.remark" class="form-tip">{{ scope.row.remark }}</div>
+                            </template>
+                        </el-table-column>
+
+                        <el-table-column label="协议" width="110" align="center">
+                            <template #default="scope">
+                                <el-tag
+                                    size="small"
+                                    :type="scope.row.protocol === 'anthropic' ? 'warning' : 'primary'"
+                                    effect="plain"
+                                >
+                                    {{ scope.row.protocol === 'anthropic' ? 'Anthropic' : 'OpenAI' }}
+                                </el-tag>
+                            </template>
+                        </el-table-column>
+
+                        <el-table-column prop="baseUrl" label="API 地址" min-width="220">
+                            <template #default="scope">
+                                <div class="url-cell">{{ scope.row.baseUrl }}</div>
+                            </template>
+                        </el-table-column>
+
+                        <el-table-column label="模型" min-width="200">
+                            <template #default="scope">
+                                <div class="model-cell">文本：{{ scope.row.model }}</div>
+                                <div class="model-cell">
+                                    视觉：
+                                    <span v-if="scope.row.visionModel">{{ scope.row.visionModel }}</span>
+                                    <span v-else class="muted">未配置</span>
+                                </div>
+                            </template>
+                        </el-table-column>
+
+                        <el-table-column label="Key" width="90" align="center">
+                            <template #default="scope">
+                                <el-tag v-if="scope.row.apiKey" size="small" type="success" effect="plain">已配置</el-tag>
+                                <el-tag v-else size="small" type="danger" effect="plain">未配置</el-tag>
+                            </template>
+                        </el-table-column>
+
+                        <el-table-column label="操作" width="190" align="center" fixed="right">
+                            <template #default="scope">
+                                <el-button size="small" text type="primary" @click="testSaved(scope.row)">测试</el-button>
+                                <el-button size="small" text type="primary" @click="openEditDialog(scope.row)">编辑</el-button>
+                                <el-button size="small" text type="danger" @click="remove(scope.row)">删除</el-button>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+
+                    <!-- 空状态 -->
+                    <div v-else-if="!loading" class="empty-state">
+                        <div class="empty-icon">🤖</div>
+                        <div>还没有任何 AI 配置</div>
+                        <el-button type="primary" style="margin-top: 18px;" @click="openCreateDialog">
+                            ➕ 新增第一个配置
+                        </el-button>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <!-- 新增/编辑弹窗 -->
+        <el-dialog
+            v-model="dialogVisible"
+            :title="isEdit ? '编辑 AI 配置' : '新增 AI 配置'"
+            width="680px"
+            :close-on-click-modal="false"
+            @closed="onDialogClosed"
+        >
+            <!-- 预设模板 -->
+            <div v-if="!isEdit" style="margin-bottom: 18px;">
+                <div class="form-section-title">快速填充模板</div>
+                <div class="preset-bar">
+                    <el-button
+                        v-for="preset in presets"
+                        :key="preset.name"
+                        size="small"
+                        @click="applyPreset(preset)"
+                    >{{ preset.name }}</el-button>
+                </div>
+                <div class="form-tip">模板仅用于快速填充，所有字段均可自由修改；内网环境请选择「自定义 / 内网服务」。</div>
+            </div>
+
+            <el-form :model="form" label-width="110px" label-position="right">
+                <el-form-item label="厂商名称" required>
+                    <el-input v-model="form.name" placeholder="如：阿里云百炼 / 内网 Ollama" clearable></el-input>
+                </el-form-item>
+
+                <el-form-item label="协议类型" required>
+                    <el-radio-group v-model="form.protocol">
+                        <el-radio-button value="openai">OpenAI 兼容</el-radio-button>
+                        <el-radio-button value="anthropic">Anthropic 原生</el-radio-button>
+                    </el-radio-group>
+                    <div class="form-tip">
+                        <span v-if="form.protocol === 'anthropic'">
+                            使用 <code>/v1/messages</code> 接口，认证头为 <code>x-api-key</code>（Claude 官方及兼容服务）
+                        </span>
+                        <span v-else>
+                            使用 <code>/v1/chat/completions</code> 接口，认证头为 <code>Authorization: Bearer</code>
+                            （通义千问、DeepSeek、智谱、Ollama、vLLM、one-api 等）
+                        </span>
+                    </div>
+                </el-form-item>
+
+                <el-form-item label="API 地址" required>
+                    <el-input v-model="form.baseUrl" placeholder="如：http://192.168.1.10:11434/v1" clearable></el-input>
+                    <div class="form-tip">
+                        支持填写根地址或含 <code>/v1</code> 的地址，系统会自动补全接口路径。内网 HTTP 地址同样支持。
+                    </div>
+                    <div v-if="endpointPreview" class="endpoint-preview">
+                        实际请求地址：{{ endpointPreview }}
+                    </div>
+                </el-form-item>
+
+                <el-form-item label="API Key" :required="!isEdit">
+                    <el-input
+                        v-model="form.apiKey"
+                        type="password"
+                        show-password
+                        :placeholder="isEdit ? '留空表示不修改已保存的 Key' : '请输入 API Key'"
+                        clearable
+                    ></el-input>
+                    <div class="form-tip">
+                        Key 保存在服务端本地配置文件中，页面仅以掩码展示。内网服务若无需鉴权，可填任意占位值（如 <code>none</code>）。
+                    </div>
+                </el-form-item>
+
+                <el-form-item label="文本模型" required>
+                    <el-input v-model="form.model" placeholder="如：qwen-max-latest / claude-sonnet-5" clearable></el-input>
+                    <div class="form-tip">用于 SQL 深度优化，模型名称需与服务端实际部署的名称一致。</div>
+                </el-form-item>
+
+                <el-form-item label="视觉模型">
+                    <el-input v-model="form.visionModel" placeholder="如：qwen-vl-max-latest（留空表示不支持图片识别）" clearable></el-input>
+                    <div class="form-tip">用于图片 OCR 识别 SQL，留空则「手工处理」页的图片上传功能不可用。</div>
+                </el-form-item>
+
+                <el-form-item label="最大 Token">
+                    <el-input-number v-model="form.maxTokens" :min="1" :max="200000" :step="1024" style="width: 180px;"></el-input-number>
+                </el-form-item>
+
+                <el-form-item label="温度">
+                    <el-input-number
+                        v-model="form.temperature"
+                        :min="0"
+                        :max="2"
+                        :step="0.1"
+                        :precision="1"
+                        placeholder="留空使用默认"
+                        style="width: 180px;"
+                    ></el-input-number>
+                    <div class="form-tip">留空表示不传该参数（部分私有化服务不支持温度参数）。</div>
+                </el-form-item>
+
+                <el-form-item label="超时（秒）">
+                    <el-input-number v-model="form.timeout" :min="5" :max="600" :step="10" style="width: 180px;"></el-input-number>
+                </el-form-item>
+
+                <el-form-item label="备注">
+                    <el-input v-model="form.remark" type="textarea" :rows="2" placeholder="可选，用于说明该配置的用途"></el-input>
+                </el-form-item>
+
+                <el-form-item label="保存后启用">
+                    <el-switch v-model="form.active"></el-switch>
+                    <span class="form-tip" style="margin-left: 10px;">开启后将作为当前生效的 AI 配置</span>
+                </el-form-item>
+            </el-form>
+
+            <!-- 测试结果 -->
+            <div v-if="testResult" class="test-result" :class="testResult.success ? 'ok' : 'fail'">
+                <div v-if="testResult.success">
+                    ✅ 连接成功（{{ testResult.elapsedMs }} ms）
+                    <div style="margin-top: 4px;">请求地址：{{ testResult.endpoint }}</div>
+                    <div style="margin-top: 4px;">模型回复：{{ testResult.reply }}</div>
+                </div>
+                <div v-else>
+                    ❌ 连接失败（{{ testResult.elapsedMs }} ms）
+                    <div style="margin-top: 4px;">请求地址：{{ testResult.endpoint }}</div>
+                    <div style="margin-top: 4px;">失败原因：{{ testResult.message }}</div>
+                </div>
+            </div>
+
+            <template #footer>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <el-button @click="testForm" :loading="testing">🔌 测试连接</el-button>
+                    <div>
+                        <el-button @click="dialogVisible = false">取消</el-button>
+                        <el-button type="primary" @click="save" :loading="saving">保存</el-button>
+                    </div>
+                </div>
+            </template>
+        </el-dialog>
+    </div>
+
+    <script>
+        const { createApp, ref, reactive, computed, onMounted } = Vue;
+
+        const app = createApp({
+            setup() {
+                const configs = ref([]);
+                const status = ref({});
+                const loading = ref(false);
+                const saving = ref(false);
+                const testing = ref(false);
+
+                const dialogVisible = ref(false);
+                const isEdit = ref(false);
+                const editingId = ref('');
+                const testResult = ref(null);
+
+                const emptyForm = () => ({
+                    name: '',
+                    protocol: 'openai',
+                    baseUrl: '',
+                    apiKey: '',
+                    model: '',
+                    visionModel: '',
+                    maxTokens: 4096,
+                    temperature: null,
+                    timeout: 120,
+                    remark: '',
+                    active: false
+                });
+
+                const form = reactive(emptyForm());
+
+                // 常见厂商预设模板，所有字段均可修改
+                const presets = ref([
+                    {
+                        name: '阿里云百炼',
+                        protocol: 'openai',
+                        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode',
+                        model: 'qwen-max-latest',
+                        visionModel: 'qwen-vl-max-latest'
+                    },
+                    {
+                        name: 'DeepSeek',
+                        protocol: 'openai',
+                        baseUrl: 'https://api.deepseek.com',
+                        model: 'deepseek-chat',
+                        visionModel: ''
+                    },
+                    {
+                        name: '智谱 GLM',
+                        protocol: 'openai',
+                        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+                        model: 'glm-4-plus',
+                        visionModel: 'glm-4v-plus'
+                    },
+                    {
+                        name: '月之暗面 Kimi',
+                        protocol: 'openai',
+                        baseUrl: 'https://api.moonshot.cn',
+                        model: 'moonshot-v1-32k',
+                        visionModel: ''
+                    },
+                    {
+                        name: 'Anthropic Claude',
+                        protocol: 'anthropic',
+                        baseUrl: 'https://api.anthropic.com',
+                        model: 'claude-sonnet-5',
+                        visionModel: 'claude-sonnet-5'
+                    },
+                    {
+                        name: 'Ollama（内网）',
+                        protocol: 'openai',
+                        baseUrl: 'http://127.0.0.1:11434/v1',
+                        model: 'qwen2.5:14b',
+                        visionModel: 'llava:13b',
+                        apiKey: 'ollama'
+                    },
+                    {
+                        name: 'vLLM（内网）',
+                        protocol: 'openai',
+                        baseUrl: 'http://127.0.0.1:8000/v1',
+                        model: 'Qwen2.5-14B-Instruct',
+                        visionModel: '',
+                        apiKey: 'none'
+                    },
+                    {
+                        name: '自定义 / 内网服务',
+                        protocol: 'openai',
+                        baseUrl: 'http://',
+                        model: '',
+                        visionModel: ''
+                    }
+                ]);
+
+                // 前端预览实际请求地址，与后端拼接规则保持一致
+                const endpointPreview = computed(() => {
+                    let baseUrl = (form.baseUrl || '').trim();
+                    if (!baseUrl || baseUrl === 'http://' || baseUrl === 'https://') return '';
+                    while (baseUrl.endsWith('/')) {
+                        baseUrl = baseUrl.slice(0, -1);
+                    }
+                    const path = form.protocol === 'anthropic' ? '/messages' : '/chat/completions';
+                    if (baseUrl.endsWith(path)) return baseUrl;
+                    if (/\/v\d+$/.test(baseUrl)) return baseUrl + path;
+                    return baseUrl + '/v1' + path;
+                });
+
+                const loadAll = async () => {
+                    loading.value = true;
+                    try {
+                        const [listRes, statusRes] = await Promise.all([
+                            axios.get('/api/ai-config'),
+                            axios.get('/api/ai-config/status')
+                        ]);
+                        if (listRes.data.code === 200) {
+                            configs.value = listRes.data.data || [];
+                        } else {
+                            ElementPlus.ElMessage.error(listRes.data.message || '加载配置失败');
+                        }
+                        if (statusRes.data.code === 200) {
+                            status.value = statusRes.data.data || {};
+                        }
+                    } catch (error) {
+                        ElementPlus.ElMessage.error('加载配置失败: ' + (error.response?.data?.message || error.message));
+                    } finally {
+                        loading.value = false;
+                    }
+                };
+
+                const resetForm = () => {
+                    Object.assign(form, emptyForm());
+                    testResult.value = null;
+                };
+
+                const openCreateDialog = () => {
+                    resetForm();
+                    isEdit.value = false;
+                    editingId.value = '';
+                    // 列表为空时默认直接启用
+                    form.active = configs.value.length === 0;
+                    dialogVisible.value = true;
+                };
+
+                const openEditDialog = (row) => {
+                    resetForm();
+                    isEdit.value = true;
+                    editingId.value = row.id;
+                    Object.assign(form, {
+                        name: row.name,
+                        protocol: row.protocol || 'openai',
+                        baseUrl: row.baseUrl,
+                        // 已保存的 Key 不回填，留空表示不修改
+                        apiKey: '',
+                        model: row.model,
+                        visionModel: row.visionModel || '',
+                        maxTokens: row.maxTokens || 4096,
+                        temperature: row.temperature ?? null,
+                        timeout: row.timeout || 120,
+                        remark: row.remark || '',
+                        active: row.active
+                    });
+                    dialogVisible.value = true;
+                };
+
+                const applyPreset = (preset) => {
+                    form.name = preset.name;
+                    form.protocol = preset.protocol;
+                    form.baseUrl = preset.baseUrl;
+                    form.model = preset.model;
+                    form.visionModel = preset.visionModel;
+                    if (preset.apiKey) {
+                        form.apiKey = preset.apiKey;
+                    }
+                    testResult.value = null;
+                };
+
+                const validateForm = () => {
+                    if (!form.name.trim()) {
+                        ElementPlus.ElMessage.warning('请输入厂商名称');
+                        return false;
+                    }
+                    if (!form.baseUrl.trim()) {
+                        ElementPlus.ElMessage.warning('请输入 API 地址');
+                        return false;
+                    }
+                    if (!/^https?:\/\/.+/.test(form.baseUrl.trim())) {
+                        ElementPlus.ElMessage.warning('API 地址必须以 http:// 或 https:// 开头');
+                        return false;
+                    }
+                    if (!form.model.trim()) {
+                        ElementPlus.ElMessage.warning('请输入文本模型名称');
+                        return false;
+                    }
+                    if (!isEdit.value && !form.apiKey.trim()) {
+                        ElementPlus.ElMessage.warning('请输入 API Key');
+                        return false;
+                    }
+                    return true;
+                };
+
+                const save = async () => {
+                    if (!validateForm()) return;
+
+                    saving.value = true;
+                    try {
+                        const payload = { ...form };
+                        const response = isEdit.value
+                            ? await axios.put('/api/ai-config/' + editingId.value, payload)
+                            : await axios.post('/api/ai-config', payload);
+
+                        if (response.data.code === 200) {
+                            ElementPlus.ElMessage.success(isEdit.value ? '配置已更新' : '配置已新增');
+                            dialogVisible.value = false;
+                            await loadAll();
+                        } else {
+                            ElementPlus.ElMessage.error(response.data.message || '保存失败');
+                        }
+                    } catch (error) {
+                        ElementPlus.ElMessage.error('保存失败: ' + (error.response?.data?.message || error.message));
+                    } finally {
+                        saving.value = false;
+                    }
+                };
+
+                const testForm = async () => {
+                    if (!validateForm()) return;
+
+                    testing.value = true;
+                    testResult.value = null;
+                    try {
+                        const payload = {
+                            protocol: form.protocol,
+                            baseUrl: form.baseUrl,
+                            model: form.model,
+                            apiKey: form.apiKey,
+                            maxTokens: form.maxTokens,
+                            timeout: form.timeout
+                        };
+                        // 编辑态且未填新 Key 时，带上 id 让后端复用已保存的 Key
+                        if (isEdit.value) {
+                            payload.id = editingId.value;
+                        }
+
+                        const response = await axios.post('/api/ai-config/test', payload);
+                        if (response.data.code === 200) {
+                            testResult.value = response.data.data;
+                            if (testResult.value.success) {
+                                ElementPlus.ElMessage.success('连接成功');
+                            }
+                        } else {
+                            ElementPlus.ElMessage.error(response.data.message || '测试失败');
+                        }
+                    } catch (error) {
+                        ElementPlus.ElMessage.error('测试失败: ' + (error.response?.data?.message || error.message));
+                    } finally {
+                        testing.value = false;
+                    }
+                };
+
+                const testSaved = async (row) => {
+                    const loadingInstance = ElementPlus.ElLoading.service({
+                        lock: true,
+                        text: '正在测试「' + row.name + '」...'
+                    });
+                    try {
+                        const response = await axios.post('/api/ai-config/test', { id: row.id });
+                        if (response.data.code === 200) {
+                            const result = response.data.data;
+                            if (result.success) {
+                                ElementPlus.ElMessageBox.alert(
+                                    '请求地址：' + result.endpoint
+                                    + '<br/>耗时：' + result.elapsedMs + ' ms'
+                                    + '<br/>模型回复：' + escapeHtml(result.reply),
+                                    '✅ 连接成功',
+                                    { dangerouslyUseHTMLString: true, confirmButtonText: '确定' }
+                                );
+                            } else {
+                                ElementPlus.ElMessageBox.alert(
+                                    '请求地址：' + result.endpoint
+                                    + '<br/>耗时：' + result.elapsedMs + ' ms'
+                                    + '<br/>失败原因：' + escapeHtml(result.message),
+                                    '❌ 连接失败',
+                                    { dangerouslyUseHTMLString: true, confirmButtonText: '确定', type: 'error' }
+                                );
+                            }
+                        } else {
+                            ElementPlus.ElMessage.error(response.data.message || '测试失败');
+                        }
+                    } catch (error) {
+                        ElementPlus.ElMessage.error('测试失败: ' + (error.response?.data?.message || error.message));
+                    } finally {
+                        loadingInstance.close();
+                    }
+                };
+
+                const activate = async (row) => {
+                    try {
+                        const response = await axios.post('/api/ai-config/' + row.id + '/activate');
+                        if (response.data.code === 200) {
+                            ElementPlus.ElMessage.success('已启用「' + row.name + '」');
+                            await loadAll();
+                        } else {
+                            ElementPlus.ElMessage.error(response.data.message || '启用失败');
+                        }
+                    } catch (error) {
+                        ElementPlus.ElMessage.error('启用失败: ' + (error.response?.data?.message || error.message));
+                    }
+                };
+
+                const remove = async (row) => {
+                    try {
+                        await ElementPlus.ElMessageBox.confirm(
+                            '确认删除配置「' + row.name + '」吗？删除后不可恢复。',
+                            '确认删除',
+                            { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' }
+                        );
+
+                        const response = await axios.delete('/api/ai-config/' + row.id);
+                        if (response.data.code === 200) {
+                            ElementPlus.ElMessage.success('配置已删除');
+                            await loadAll();
+                        } else {
+                            ElementPlus.ElMessage.error(response.data.message || '删除失败');
+                        }
+                    } catch (error) {
+                        if (error !== 'cancel') {
+                            ElementPlus.ElMessage.error('删除失败: ' + (error.response?.data?.message || error.message));
+                        }
+                    }
+                };
+
+                const onDialogClosed = () => {
+                    resetForm();
+                };
+
+                const escapeHtml = (text) => {
+                    if (text === null || text === undefined) return '';
+                    return String(text)
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/"/g, '&quot;');
+                };
+
+                onMounted(loadAll);
+
+                return {
+                    configs,
+                    status,
+                    loading,
+                    saving,
+                    testing,
+                    dialogVisible,
+                    isEdit,
+                    form,
+                    presets,
+                    testResult,
+                    endpointPreview,
+                    loadAll,
+                    openCreateDialog,
+                    openEditDialog,
+                    applyPreset,
+                    save,
+                    testForm,
+                    testSaved,
+                    activate,
+                    remove,
+                    onDialogClosed
+                };
+            }
+        });
+
+        app.use(ElementPlus);
+        app.mount('#app');
+    </script>
+</body>
+</html>

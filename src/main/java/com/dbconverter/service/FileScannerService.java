@@ -3,18 +3,20 @@ package com.dbconverter.service;
 import com.dbconverter.common.ConversionItem;
 import com.dbconverter.common.ScanTask;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Async;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
@@ -106,16 +108,33 @@ public class FileScannerService {
     );
 
     private final SqlConverter sqlConverter;
+    private final AiService aiService;
     private final Map<String, ScanTask> scanTasks = new ConcurrentHashMap<>();
 
+    /** AI 优化的条目上限，避免一次扫描打出成千上万次请求 */
+    @Value("${app.ai.auto-optimize.max-items:200}")
+    private int aiMaxItems = 200;
+
+    /** AI 优化的并发线程数 */
+    @Value("${app.ai.auto-optimize.concurrency:4}")
+    private int aiConcurrency = 4;
+
+    /** 扫描阶段在总进度里占的百分比（启用 AI 时，剩下的留给 AI 阶段） */
+    private static final int SCAN_WEIGHT_WITH_AI = 60;
+
     @Autowired
-    public FileScannerService(SqlConverter sqlConverter) {
+    public FileScannerService(SqlConverter sqlConverter, AiService aiService) {
         this.sqlConverter = sqlConverter;
+        this.aiService = aiService;
     }
 
     public String startScan(String path, String targetDb) {
+        return startScan(path, targetDb, false);
+    }
+
+    public String startScan(String path, String targetDb, boolean enableAi) {
         String taskId = UUID.randomUUID().toString().replace("-", "");
-        ScanTask task = new ScanTask(taskId, path, targetDb);
+        ScanTask task = new ScanTask(taskId, path, targetDb, enableAi);
         scanTasks.put(taskId, task);
         scanAsync(task);
         return taskId;
@@ -164,6 +183,7 @@ public class FileScannerService {
 
             int totalFiles = files.size();
             int processedFiles = 0;
+            int scanWeight = task.isEnableAi() ? SCAN_WEIGHT_WITH_AI : 100;
 
             for (Path file : files) {
                 try {
@@ -172,7 +192,11 @@ public class FileScannerService {
                     log.warn("扫描文件失败: {} - {}", file, e.getMessage());
                 }
                 processedFiles++;
-                task.setProgress((processedFiles * 100) / totalFiles);
+                task.setProgress((processedFiles * scanWeight) / totalFiles);
+            }
+
+            if (task.isEnableAi()) {
+                optimizeWithAi(task);
             }
 
             task.complete();
@@ -182,67 +206,315 @@ public class FileScannerService {
         }
     }
 
+    // ============================================================
+    //  AI 优化阶段
+    // ============================================================
+
+    /**
+     * 对规则转换的结果再做一轮 AI 优化。
+     * 任何一条 AI 结果没通过安全校验，就保留原有的规则转换结果，不影响整体任务。
+     */
+    private void optimizeWithAi(ScanTask task) {
+        task.setPhase("optimizing");
+
+        List<ConversionItem> items = new ArrayList<>(task.getItems());
+        if (items.isEmpty()) {
+            task.setProgress(100);
+            return;
+        }
+
+        if (!aiService.isAvailable()) {
+            task.setAiMessage("未配置可用的 AI 模型，已跳过 AI 优化（仅应用规则转换结果）");
+            log.info("任务 {} 启用了 AI 优化但 AI 不可用，已跳过", task.getTaskId());
+            task.setProgress(100);
+            return;
+        }
+
+        // 结构脆弱的片段（含 MyBatis 占位符或 XML 标签）不送 AI：
+        // 模型会把 #{id} 还原成 ?、把 <if> 标签吃掉，按偏移写回就等于损坏源文件
+        List<ConversionItem> eligible = new ArrayList<>(items.size());
+        int fragileCount = 0;
+        for (ConversionItem item : items) {
+            if (isAiEligible(item)) {
+                eligible.add(item);
+            } else {
+                fragileCount++;
+            }
+        }
+
+        if (eligible.isEmpty()) {
+            task.setAiSkipped(items.size());
+            task.setAiMessage("待改造片段均含动态 SQL 占位符或 XML 标签，为避免破坏源文件已跳过 AI 优化");
+            task.setProgress(100);
+            return;
+        }
+
+        int limit = Math.min(eligible.size(), Math.max(1, aiMaxItems));
+        task.setAiTotal(limit);
+        task.setAiSkipped(items.size() - limit);
+
+        List<String> skipReasons = new ArrayList<>(2);
+        if (eligible.size() > limit) {
+            skipReasons.add("条目数超过上限 " + limit + " 条，其余 " + (eligible.size() - limit)
+                    + " 条仅使用规则转换结果");
+        }
+        if (fragileCount > 0) {
+            skipReasons.add(fragileCount + " 条含动态 SQL 占位符或 XML 标签，为避免破坏源文件未送 AI");
+        }
+        if (!skipReasons.isEmpty()) {
+            task.setAiMessage(String.join("；", skipReasons));
+        }
+
+        int threads = Math.min(Math.max(1, aiConcurrency), limit);
+        ExecutorService pool = Executors.newFixedThreadPool(threads, r -> {
+            Thread t = new Thread(r, "ai-optimize-" + task.getTaskId());
+            t.setDaemon(true);
+            return t;
+        });
+
+        try {
+            List<Future<?>> futures = new ArrayList<>(limit);
+            for (int i = 0; i < limit; i++) {
+                ConversionItem item = eligible.get(i);
+                futures.add(pool.submit(() -> optimizeItem(item, task)));
+            }
+            for (Future<?> future : futures) {
+                try {
+                    future.get();
+                } catch (Exception e) {
+                    log.debug("AI 优化子任务异常: {}", e.getMessage());
+                }
+            }
+        } finally {
+            pool.shutdown();
+        }
+
+        log.info("任务 {} AI 优化完成：应用 {} 条，失败/拒绝 {} 条，跳过 {} 条",
+                task.getTaskId(), task.getAiApplied(), task.getAiFailed(), task.getAiSkipped());
+        task.setProgress(100);
+    }
+
+    /**
+     * 判断该条目是否可以交给 AI 重写。
+     * <p>AI 只保证输出「一条合法 SQL」，不保证保留 MyBatis 占位符和 XML 动态标签。
+     * 而按偏移写回是原样覆盖，占位符一旦丢失就是源文件损坏，因此这类片段一律不送 AI。
+     */
+    private boolean isAiEligible(ConversionItem item) {
+        String source = item.getSourceSql();
+        if (source == null) return false;
+        if (source.contains("#{") || source.contains("${")) return false;
+        return !XML_TAG_IN_SQL.matcher(source).find();
+    }
+
+    /** 与 SqlConverter 的掩码保持同样的保守写法：{@code <} 后必须紧跟字母或 /，避免误判 {@code a < 5}。 */
+    private static final Pattern XML_TAG_IN_SQL =
+            Pattern.compile("</?[A-Za-z][\\w:.-]*(?:\\s[^<>]*)?/?>");
+
+    private void optimizeItem(ConversionItem item, ScanTask task) {
+        String ruleSql = item.getTargetSql();
+        try {
+            String aiRaw = aiService.optimizeSql(ruleSql, task.getTargetDb());
+            String safeSql = sanitizeAiSql(aiRaw, item);
+
+            if (safeSql == null) {
+                task.incrementAiFailed();
+            } else if (!safeSql.equals(ruleSql)) {
+                item.setRuleSql(ruleSql);
+                item.setTargetSql(safeSql);
+                item.setAiOptimized(true);
+                item.setConversionType(item.getConversionType() + " + AI优化");
+                task.incrementAiApplied();
+            }
+            // safeSql 与规则结果一致：AI 认为无需再改，什么都不做
+        } catch (Exception e) {
+            task.incrementAiFailed();
+            log.debug("AI 优化条目失败（保留规则转换结果）: {} - {}",
+                    item.getFilePath(), e.getMessage());
+        } finally {
+            int done = task.incrementAiDone();
+            int total = Math.max(1, task.getAiTotal());
+            task.setProgress(SCAN_WEIGHT_WITH_AI
+                    + (done * (100 - SCAN_WEIGHT_WITH_AI)) / total);
+        }
+    }
+
+    /**
+     * AI 输出的安全校验与归一化。
+     * <p>
+     * 这一步是必须的：{@code FileReplacerService} 会把 targetSql 原样写回 .java/.xml 源文件，
+     * 一旦模型返回 Markdown 围栏、多行文本或裸双引号，就会直接破坏源码语法。
+     * 校验不通过时返回 {@code null}，调用方保留规则转换结果。
+     *
+     * @return 可安全写回文件的 SQL；不可信时返回 null
+     */
+    String sanitizeAiSql(String aiRaw, ConversionItem item) {
+        if (aiRaw == null) return null;
+
+        String s = AiService.stripCodeFence(aiRaw).trim();
+        if (s.isEmpty()) return null;
+
+        // 仍然残留反引号 => 模型输出结构不干净，不可信
+        if (s.indexOf('`') >= 0) return null;
+
+        String ruleSql = item.getTargetSql() == null ? "" : item.getTargetSql();
+        boolean isSqlFile = item.getFilePath() != null
+                && item.getFilePath().toLowerCase().endsWith(".sql");
+
+        if (!isSqlFile) {
+            // 源码/配置文件里的 SQL 是单行字符串字面量，
+            // 多行内容替换进去会破坏 Java 字面量或 XML 属性，必须压成单行
+            s = s.replaceAll("\\s+", " ").trim();
+            // 裸双引号会提前结束 Java 字符串字面量；反斜杠会引入意外转义
+            if (s.indexOf('"') >= 0 || s.indexOf('\\') >= 0) return null;
+        }
+
+        // 结尾分号必须和「文件里被替换掉的原文」一致，否则会吞掉或多出语句分隔符。
+        // 以 sourceSql 为准（它才是真正会被替换的那段文本），sourceSql 缺失时退回规则结果。
+        String terminatorRef = (item.getSourceSql() != null && !item.getSourceSql().isBlank())
+                ? item.getSourceSql() : ruleSql;
+        boolean refEndsWithSemicolon = terminatorRef.trim().endsWith(";");
+        boolean aiEndsWithSemicolon = s.endsWith(";");
+        if (refEndsWithSemicolon && !aiEndsWithSemicolon) {
+            s = s + ";";
+        } else if (!refEndsWithSemicolon && aiEndsWithSemicolon) {
+            s = s.substring(0, s.length() - 1).trim();
+        }
+
+        // 输出必须仍然是一条 SQL（复用扫描阶段的校验器）
+        List<String> validated = new ArrayList<>(1);
+        addIfValidSql(s, validated);
+        if (validated.isEmpty()) return null;
+
+                // 非 ASCII 字符：只允许原文里已经出现过的（例如 WHERE name = '张三' 这类中文字面量），
+        // 出现原文没有的中文说明模型夹带了解释性文字
+        Set<Character> allowedNonAscii = new HashSet<>();
+        for (int i = 0; i < ruleSql.length(); i++) {
+            char c = ruleSql.charAt(i);
+            if (c > 127) allowedNonAscii.add(c);
+        }
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c > 127 && !allowedNonAscii.contains(c)) return null;
+        }
+
+        // 长度暴增通常意味着模型夹带了解释性文字
+        if (s.length() > ruleSql.length() * 3 + 200) return null;
+
+        return s;
+    }
+
+    /**
+     * 扫描到的一段 SQL：原文片段 + 它在文件中的确切位置。
+     * <p>{@code rawText} 是文件里逐字存在的内容（含换行、缩进、{@code #{}}、Java 转义），
+     * 替换时按 {@code [start, end)} 原样覆盖，因此不再依赖"归一化文本能否匹配上原文"。
+     * {@code normalized} 只用于有效性判断与日志，不参与替换。
+     */
+    private static class SqlFragment {
+        final String rawText;
+        final int start;
+        final int end;
+        final String normalized;
+
+        SqlFragment(String rawText, int start, int end, String normalized) {
+            this.rawText = rawText;
+            this.start = start;
+            this.end = end;
+            this.normalized = normalized;
+        }
+    }
+
     private void scanFile(Path file, ScanTask task) throws IOException {
         String content = Files.readString(file, StandardCharsets.UTF_8);
         String fileName = file.getFileName().toString().toLowerCase();
 
-        List<String> sqls = new ArrayList<>();
+        List<SqlFragment> fragments = new ArrayList<>();
 
         if (fileName.endsWith(".java")) {
-            sqls.addAll(extractSqlFromJava(content));
+            fragments.addAll(extractSqlFromJava(content));
         } else if (fileName.endsWith(".xml")) {
-            sqls.addAll(extractSqlFromXml(content));
+            fragments.addAll(extractSqlFromXml(content));
         } else if (fileName.endsWith(".properties") || fileName.endsWith(".yml") || fileName.endsWith(".yaml")) {
-            sqls.addAll(extractSqlFromConfig(content));
+            fragments.addAll(extractSqlFromConfig(content));
         } else if (fileName.endsWith(".sql")) {
-            sqls.addAll(extractSqlFromSqlFile(content));
+            fragments.addAll(extractSqlFromSqlFile(content));
         }
 
-        // 去重
-        Set<String> seen = new HashSet<>();
-        for (String sql : sqls) {
-            String normalized = sql.trim().replaceAll("\\s+", " ");
-            if (seen.contains(normalized)) continue;
-            seen.add(normalized);
-
+        for (SqlFragment fragment : dropOverlapping(fragments)) {
             try {
-                String convertedSql = sqlConverter.convert(sql, task.getTargetDb());
-                if (!sql.trim().equals(convertedSql.trim())) {
-                    ConversionItem item = new ConversionItem(
-                            file.toString(),
-                            sql,
-                            convertedSql,
-                            determineConversionType(sql, convertedSql),
-                            0
-                    );
-                    task.addItem(item);
-                }
+                // 保形转换：结果要按位置写回源文件，不能经过 JSqlParser 重排
+                String convertedSql = sqlConverter.convertPreservingText(fragment.rawText, task.getTargetDb());
+                if (fragment.rawText.equals(convertedSql)) continue;
+
+                ConversionItem item = new ConversionItem(
+                        file.toString(),
+                        fragment.rawText,
+                        convertedSql,
+                        determineConversionType(fragment.rawText, convertedSql),
+                        lineNumberAt(content, fragment.start)
+                );
+                item.setStartOffset(fragment.start);
+                item.setEndOffset(fragment.end);
+                task.addItem(item);
             } catch (Exception e) {
-                log.debug("转换SQL失败（已跳过）: {} - {}", sql.substring(0, Math.min(60, sql.length())), e.getMessage());
+                log.debug("转换SQL失败（已跳过）: {} - {}",
+                        fragment.normalized.substring(0, Math.min(60, fragment.normalized.length())),
+                        e.getMessage());
             }
         }
+    }
+
+    /**
+     * 丢弃区间重叠的片段，只保留先出现、更长的那个。
+     * <p>Java 提取会用三个正则（@Query / Text Block / 普通字符串）扫同一份内容，
+     * 同一段文本可能被命中多次；按位置替换要求区间互不重叠，否则下标会互相错位。
+     */
+    private List<SqlFragment> dropOverlapping(List<SqlFragment> fragments) {
+        List<SqlFragment> sorted = new ArrayList<>(fragments);
+        sorted.sort((a, b) -> a.start != b.start
+                ? Integer.compare(a.start, b.start)
+                : Integer.compare(b.end - b.start, a.end - a.start));
+
+        List<SqlFragment> accepted = new ArrayList<>();
+        int lastEnd = -1;
+        for (SqlFragment f : sorted) {
+            if (f.start < lastEnd) continue;    // 与已接受区间重叠
+            accepted.add(f);
+            lastEnd = f.end;
+        }
+        return accepted;
+    }
+
+    /** 计算偏移量所在的行号（1 起）。此前这里恒为 0，前端无法定位。 */
+    private int lineNumberAt(String content, int offset) {
+        int line = 1;
+        int limit = Math.min(offset, content.length());
+        for (int i = 0; i < limit; i++) {
+            if (content.charAt(i) == '\n') line++;
+        }
+        return line;
     }
 
     // ============================================================
     //  Java 文件 SQL 提取
     // ============================================================
-    private List<String> extractSqlFromJava(String content) {
-        List<String> sqls = new ArrayList<>();
+    private List<SqlFragment> extractSqlFromJava(String content) {
+        List<SqlFragment> fragments = new ArrayList<>();
 
         // 1. @Query 注解中的 SQL（优先级最高、最可靠）
         Matcher queryMatcher = JAVA_QUERY_ANNOTATION_PATTERN.matcher(content);
         while (queryMatcher.find()) {
-            String sql = cleanJavaString(queryMatcher.group(1));
-            addIfValidSql(sql, sqls);
+            addFragment(fragments, content, queryMatcher.start(1), queryMatcher.end(1),
+                    cleanJavaString(queryMatcher.group(1)));
         }
 
         // 2. Text Block（"""..."""）
         Matcher textBlockMatcher = JAVA_TEXT_BLOCK_PATTERN.matcher(content);
         while (textBlockMatcher.find()) {
-            String sql = textBlockMatcher.group(1).trim();
-            // Text Block 中可能有 Java 字符串拼接的 + 号，简单清理
-            sql = sql.replace("\"", "").replace("+", " ").replaceAll("\\s+", " ").trim();
-            addIfValidSql(sql, sqls);
+            String normalized = textBlockMatcher.group(1)
+                    .replace("\"", "").replace("+", " ")
+                    .replaceAll("\\s+", " ").trim();
+            addFragment(fragments, content, textBlockMatcher.start(1), textBlockMatcher.end(1),
+                    normalized);
         }
 
         // 3. 普通双引号字符串
@@ -253,12 +525,23 @@ public class FileScannerService {
             String contextBefore = content.substring(Math.max(0, start - 100), start);
             if (isSkipContext(contextBefore)) continue;
 
-            String raw = stringMatcher.group(1);
-            String sql = cleanJavaString(raw);
-            addIfValidSql(sql, sqls);
+            addFragment(fragments, content, stringMatcher.start(1), stringMatcher.end(1),
+                    cleanJavaString(stringMatcher.group(1)));
         }
 
-        return sqls;
+        return fragments;
+    }
+
+    /**
+     * 用归一化后的文本做有效性判断，但登记的是原文区间。
+     * <p>两者分离是本次改造的核心：判断"像不像 SQL"需要归一化，
+     * 而写回源文件必须用原文。
+     */
+    private void addFragment(List<SqlFragment> fragments, String content,
+                             int start, int end, String normalized) {
+        if (start < 0 || end > content.length() || end <= start) return;
+        if (!isValidSql(normalized)) return;
+        fragments.add(new SqlFragment(content.substring(start, end), start, end, normalized));
     }
 
     /**
@@ -292,84 +575,122 @@ public class FileScannerService {
     // ============================================================
     //  XML 文件 SQL 提取（MyBatis mapper）
     // ============================================================
-    private List<String> extractSqlFromXml(String content) {
-        List<String> sqls = new ArrayList<>();
+    private List<SqlFragment> extractSqlFromXml(String content) {
+        List<SqlFragment> fragments = new ArrayList<>();
 
         Matcher matcher = MYBATIS_TAG_PATTERN.matcher(content);
         while (matcher.find()) {
-            String rawSql = matcher.group(2).trim();
-            if (rawSql.length() < 10) continue;
-
-            // 移除 CDATA 包裹
-            rawSql = rawSql.replaceAll("<!\\[CDATA\\[", "").replaceAll("]]>", "");
-
-            // 移除 MyBatis 动态标签，但保留里面的内容
-            rawSql = rawSql.replaceAll("<if\\b[^>]*>", " ")
-                    .replaceAll("</if>", " ")
-                    .replaceAll("<where\\b[^>]*>", " WHERE ")
-                    .replaceAll("</where>", " ")
-                    .replaceAll("<set\\b[^>]*>", " SET ")
-                    .replaceAll("</set>", " ")
-                    .replaceAll("<choose\\b[^>]*>", " ")
-                    .replaceAll("</choose>", " ")
-                    .replaceAll("<when\\b[^>]*>", " ")
-                    .replaceAll("</when>", " ")
-                    .replaceAll("<otherwise\\b[^>]*>", " ")
-                    .replaceAll("</otherwise>", " ")
-                    .replaceAll("<foreach\\b[^>]*>", " ")
-                    .replaceAll("</foreach>", " ")
-                    .replaceAll("<trim\\b[^>]*>", " ")
-                    .replaceAll("</trim>", " ")
-                    .replaceAll("<include\\b[^>]*/?>", " ");
-
-            // 移除其他 XML 标签
-            rawSql = rawSql.replaceAll("<[^>]+>", " ");
-
-            // MyBatis 参数 #{xxx} 和 ${xxx} 替换为占位符 ?
-            rawSql = rawSql.replaceAll("#\\{[^}]*}", "?");
-            rawSql = rawSql.replaceAll("\\$\\{[^}]*}", "?");
-
-            // 合并空白
-            rawSql = rawSql.replaceAll("\\s+", " ").trim();
-
-            addIfValidSql(rawSql, sqls);
+            // 归一化只为判断"是不是 SQL"；登记的仍是含标签与 #{} 的原文区间
+            addFragment(fragments, content, matcher.start(2), matcher.end(2),
+                    normalizeMyBatisSql(matcher.group(2)));
         }
 
-        return sqls;
+        return fragments;
+    }
+
+    /**
+     * 把 mapper 片段压成纯 SQL，用于有效性判断。
+     * <p>注意结果**不能**用来写回文件——{@code #{id}} 变成了 {@code ?}、标签和换行都没了，
+     * 原样写回会毁掉 mapper。这正是早先"扫得出来改不进去"的根因。
+     */
+    private String normalizeMyBatisSql(String rawSql) {
+        String sql = rawSql.trim();
+        if (sql.length() < 10) return "";
+
+        // 移除 CDATA 包裹
+        sql = sql.replaceAll("<!\\[CDATA\\[", "").replaceAll("]]>", "");
+
+        // 移除 MyBatis 动态标签，但保留里面的内容
+        sql = sql.replaceAll("<if\\b[^>]*>", " ")
+                .replaceAll("</if>", " ")
+                .replaceAll("<where\\b[^>]*>", " WHERE ")
+                .replaceAll("</where>", " ")
+                .replaceAll("<set\\b[^>]*>", " SET ")
+                .replaceAll("</set>", " ")
+                .replaceAll("<choose\\b[^>]*>", " ")
+                .replaceAll("</choose>", " ")
+                .replaceAll("<when\\b[^>]*>", " ")
+                .replaceAll("</when>", " ")
+                .replaceAll("<otherwise\\b[^>]*>", " ")
+                .replaceAll("</otherwise>", " ")
+                .replaceAll("<foreach\\b[^>]*>", " ")
+                .replaceAll("</foreach>", " ")
+                .replaceAll("<trim\\b[^>]*>", " ")
+                .replaceAll("</trim>", " ")
+                .replaceAll("<include\\b[^>]*/?>", " ");
+
+        // 移除其他 XML 标签
+        sql = sql.replaceAll("<[^>]+>", " ");
+
+        // MyBatis 参数 #{xxx} 和 ${xxx} 替换为占位符 ?
+        sql = sql.replaceAll("#\\{[^}]*}", "?");
+        sql = sql.replaceAll("\\$\\{[^}]*}", "?");
+
+        // 合并空白
+        return sql.replaceAll("\\s+", " ").trim();
     }
 
     // ============================================================
     //  配置文件 SQL 提取
     // ============================================================
-    private List<String> extractSqlFromConfig(String content) {
-        List<String> sqls = new ArrayList<>();
+    private List<SqlFragment> extractSqlFromConfig(String content) {
+        List<SqlFragment> fragments = new ArrayList<>();
         Matcher matcher = CONFIG_SQL_PATTERN.matcher(content);
         while (matcher.find()) {
-            String sql = matcher.group(1).trim();
-            // 去掉尾部引号和分号
-            sql = sql.replaceAll("[\"']\\s*$", "").trim();
-            addIfValidSql(sql, sqls);
+            // 收缩区间以剔除两端空白与收尾的引号，保证 rawText 与区间严格对应
+            int[] span = shrinkSpan(content, matcher.start(1), matcher.end(1));
+            if (span == null) continue;
+            addFragment(fragments, content, span[0], span[1],
+                    content.substring(span[0], span[1]));
         }
-        return sqls;
+        return fragments;
+    }
+
+    /** 从两端收缩掉空白与收尾引号，返回调整后的 [start, end)；无有效内容时返回 null。 */
+    private int[] shrinkSpan(String content, int start, int end) {
+        while (start < end && Character.isWhitespace(content.charAt(start))) start++;
+        while (end > start && Character.isWhitespace(content.charAt(end - 1))) end--;
+        while (end > start && (content.charAt(end - 1) == '"' || content.charAt(end - 1) == '\'')) {
+            end--;
+            while (end > start && Character.isWhitespace(content.charAt(end - 1))) end--;
+        }
+        return end > start ? new int[]{start, end} : null;
     }
 
     // ============================================================
     //  .sql 文件 SQL 提取
     // ============================================================
-    private List<String> extractSqlFromSqlFile(String content) {
-        List<String> sqls = new ArrayList<>();
+    private List<SqlFragment> extractSqlFromSqlFile(String content) {
+        List<SqlFragment> fragments = new ArrayList<>();
 
-        // 先去掉 SQL 注释
-        String cleaned = content
-                .replaceAll("--[^\n]*", "")           // 单行注释
-                .replaceAll("/\\*[\\s\\S]*?\\*/", ""); // 块注释
+        // 注释用等长空格替换而不是删除：长度不变，matcher 的下标才能直接映射回原文
+        String blanked = blankOutSqlComments(content);
 
-        Matcher matcher = SQL_FILE_PATTERN.matcher(cleaned);
+        Matcher matcher = SQL_FILE_PATTERN.matcher(blanked);
         while (matcher.find()) {
-            String sql = matcher.group().trim();
-            addIfValidSql(sql, sqls);
+            int[] span = shrinkSpan(content, matcher.start(), matcher.end());
+            if (span == null) continue;
+            addFragment(fragments, content, span[0], span[1],
+                    content.substring(span[0], span[1]));
         }
-        return sqls;
+        return fragments;
+    }
+
+    /** 把 SQL 注释替换成等长空格，保持整体长度与后续下标不变。 */
+    private String blankOutSqlComments(String content) {
+        StringBuilder sb = new StringBuilder(content);
+        blankMatches(Pattern.compile("--[^\n]*"), sb);
+        blankMatches(Pattern.compile("/\\*[\\s\\S]*?\\*/"), sb);
+        return sb.toString();
+    }
+
+    private void blankMatches(Pattern pattern, StringBuilder sb) {
+        Matcher m = pattern.matcher(sb);
+        while (m.find()) {
+            for (int i = m.start(); i < m.end(); i++) {
+                if (sb.charAt(i) != '\n') sb.setCharAt(i, ' ');
+            }
+        }
     }
 
     // ============================================================
@@ -378,17 +699,16 @@ public class FileScannerService {
 
     /**
      * 判断一个字符串是否是有效的、值得转换的 SQL 语句。
-     * 只有通过校验的 SQL 才会被加入结果列表。
      */
-    private void addIfValidSql(String sql, List<String> result) {
-        if (sql == null) return;
+    private boolean isValidSql(String sql) {
+        if (sql == null) return false;
         sql = sql.trim();
 
         // 1. 长度过滤
-        if (sql.length() < 15) return;
+        if (sql.length() < 15) return false;
 
         // 2. 假阳性过滤
-        if (FALSE_POSITIVE_INDICATORS.matcher(sql).find()) return;
+        if (FALSE_POSITIVE_INDICATORS.matcher(sql).find()) return false;
 
         // 3. 必须包含 SQL 关键字
         String upper = sql.toUpperCase();
@@ -396,7 +716,7 @@ public class FileScannerService {
                 || upper.contains("UPDATE") || upper.contains("DELETE")
                 || upper.contains("CREATE TABLE") || upper.contains("ALTER TABLE")
                 || upper.contains("DROP TABLE");
-        if (!hasKeyword) return;
+        if (!hasKeyword) return false;
 
         // 4. 结构校验：SELECT 必须有 FROM，INSERT 必须有 INTO，UPDATE 必须有 SET，DELETE 必须有 FROM
         boolean validStructure = false;
@@ -421,26 +741,33 @@ public class FileScannerService {
         if (HAS_CREATE_TABLE.matcher(sql).find()) validStructure = true;
         if (HAS_ALTER_TABLE.matcher(sql).find()) validStructure = true;
 
-        if (!validStructure) return;
+        if (!validStructure) return false;
 
         // 5. 过滤纯控制流片段（IF/WHILE/BEGIN/END 开头、没有独立 DML 的）
         String trimmed = sql.trim();
-        if (trimmed.toUpperCase().startsWith("IF") && !trimmed.toUpperCase().startsWith("IF EXISTS")) return;
-        if (trimmed.toUpperCase().startsWith("WHILE")) return;
-        if (trimmed.toUpperCase().startsWith("BEGIN")) return;
-        if (trimmed.toUpperCase().startsWith("END")) return;
+        if (trimmed.toUpperCase().startsWith("IF") && !trimmed.toUpperCase().startsWith("IF EXISTS")) return false;
+        if (trimmed.toUpperCase().startsWith("WHILE")) return false;
+        if (trimmed.toUpperCase().startsWith("BEGIN")) return false;
+        if (trimmed.toUpperCase().startsWith("END")) return false;
 
         // 6. 过滤含有过多 Java/代码痕迹的字符串
         long parenCount = sql.chars().filter(c -> c == '(').count();
         long closeParenCount = sql.chars().filter(c -> c == ')').count();
-        if (Math.abs(parenCount - closeParenCount) > 2) return; // 括号严重不匹配
+        if (Math.abs(parenCount - closeParenCount) > 2) return false; // 括号严重不匹配
 
         // 7. 过滤含有明显 Java 代码片段的
         if (sql.contains("public ") || sql.contains("private ") || sql.contains("void ")
                 || sql.contains("return ") || sql.contains("new ") || sql.contains(".get(")
-                || sql.contains(".set(") || sql.contains("this.")) return;
+                || sql.contains(".set(") || sql.contains("this.")) return false;
 
-        result.add(sql);
+        return true;
+    }
+
+    /** 校验通过则收集（AI 结果校验仍在用这个形式）。 */
+    private void addIfValidSql(String sql, List<String> result) {
+        if (isValidSql(sql)) {
+            result.add(sql.trim());
+        }
     }
 
     // ============================================================
