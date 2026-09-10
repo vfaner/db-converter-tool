@@ -8,6 +8,8 @@ English | [中文](README.md)
 
 Database Migration Tool is a Spring Boot 3 web application that converts standard SQL into compatible syntax for domestic Chinese databases. It supports both manual single-statement conversion and batch auto-scanning with replacement, along with AI-powered deep optimization.
 
+- Demo video: <https://www.bilibili.com/video/BV15wbA66EP1> (Bilibili; narration in Chinese)
+
 ### ✨ Features
 
 - 🔄 **Intelligent SQL Conversion**: JSqlParser-based parsing plus lexical scanning — function replacement, type mapping, syntax rewriting

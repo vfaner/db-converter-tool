@@ -8,6 +8,8 @@
 
 数据库信创改造工具是一个基于 Spring Boot 3 的 Web 应用，用于将标准 SQL 智能转换为国产信创数据库的兼容语法。支持手工逐条转换和批量自动扫描替换两种模式，并提供 AI 深度优化能力。
 
+- 视频演示（B 站）：<https://www.bilibili.com/video/BV15wbA66EP1>
+
 ### ✨ 主要特性
 
 - 🔄 **智能 SQL 转换**：基于 JSqlParser 解析 AST，进行函数替换、类型映射、语法改写
